@@ -1,7 +1,8 @@
 import React, { useState, useEffect, useRef, useCallback } from 'react';
 
 const NUM_TASKS = 14;
-const API_URL = import.meta.env.VITE_API_URL || 'https://voice-to-task.onrender.com';
+const API_URL = 'https://voice-to-task.onrender.com';
+
 
 // Auto-growing textarea that resizes to fit its content
 function TaskTextarea({ value, placeholder, onChange }) {
