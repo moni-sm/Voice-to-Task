@@ -443,6 +443,7 @@ function App() {
         signatures: sigData
       };
 
+      // Server now returns the PDF binary directly
       const response = await fetch(`${API_URL}/api/generate-pdf`, {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
@@ -450,23 +451,31 @@ function App() {
       });
 
       if (!response.ok) throw new Error('Failed to generate PDF');
-      const result = await response.json();
 
-      if (result.pdf_url) {
-        const pdfUrl = result.pdf_url.startsWith('http') ? result.pdf_url : `${API_URL}${result.pdf_url}`;
-        const pdfResponse = await fetch(pdfUrl);
-        const blob = await pdfResponse.blob();
-        const blobUrl = URL.createObjectURL(blob);
+      const blob = await response.blob();
+      const blobUrl = URL.createObjectURL(blob);
+      const filename = `ZeeSense_Report_${Date.now()}.pdf`;
+
+      // Detect iOS Safari — it blocks programmatic link clicks after async
+      const isIOS = /iPad|iPhone|iPod/.test(navigator.userAgent) && !window.MSStream;
+
+      if (isIOS) {
+        // iOS Safari: open in new tab so user can use Share > Save to Files
+        window.open(blobUrl, '_blank');
+      } else {
+        // Android / Desktop: trigger native file download
         const link = document.createElement('a');
         link.href = blobUrl;
-        link.download = `ZeeSense_Report_${Date.now()}.pdf`;
+        link.download = filename;
+        link.style.display = 'none';
         document.body.appendChild(link);
         link.click();
         document.body.removeChild(link);
-        setTimeout(() => URL.revokeObjectURL(blobUrl), 100);
-      } else {
-        alert('Failed to get PDF URL');
       }
+
+      // Clean up blob URL after a short delay
+      setTimeout(() => URL.revokeObjectURL(blobUrl), 5000);
+
     } catch (error) {
       console.error(error);
       alert('Error generating PDF: ' + error.message);
@@ -474,6 +483,7 @@ function App() {
       setIsGeneratingPdf(false);
     }
   };
+
 
   // ── MOUSE HANDLERS ──
   const getPos = (e, canvas) => {

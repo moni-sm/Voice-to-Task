@@ -4,6 +4,7 @@ import time
 from fastapi import FastAPI, UploadFile, File, Form, HTTPException
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.staticfiles import StaticFiles
+from fastapi.responses import FileResponse
 import google.generativeai as genai
 from fpdf import FPDF
 from dotenv import load_dotenv
@@ -264,7 +265,16 @@ async def process_data(audio: UploadFile = File(None), text: str = Form(None)):
 async def generate_pdf_endpoint(data: dict):
     try:
         pdf_filename = generate_zeeseense_pdf(data)
-        return {"pdf_url": f"/static/{pdf_filename}"}
+        pdf_path = os.path.join("static", pdf_filename)
+        return FileResponse(
+            path=pdf_path,
+            media_type="application/pdf",
+            filename=pdf_filename,
+            headers={
+                "Content-Disposition": f'attachment; filename="{pdf_filename}"',
+                "Access-Control-Expose-Headers": "Content-Disposition",
+            }
+        )
     except Exception as e:
         raise HTTPException(status_code=500, detail=str(e))
 
