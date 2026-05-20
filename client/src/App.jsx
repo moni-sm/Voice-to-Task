@@ -365,26 +365,22 @@ function App() {
   return (
     <>
       {/* TOOLBAR */}
-      <div className="toolbar">
-        <span className="toolbar-label">✦ AI Fill</span>
-        <input 
-          className="toolbar-input" 
-          id="aiTextInput" 
-          placeholder="Type rough notes to auto-fill tasks… (e.g. replaced sensor, calibrated pump)" 
-          value={aiText}
-          onChange={e => setAiText(e.target.value)}
-          onKeyDown={e => e.key === 'Enter' && handleImprovise()}
-        />
-        <button className="btn btn-blue" id="improviseBtn" onClick={() => handleImprovise()} disabled={processingIdx === 'global'}>
-          {processingIdx === 'global' ? '⏳ Processing...' : processingIdx === 'done-global' ? '✓ Done' : 'Improvise'}
+      <div className="toolbar" style={{ justifyContent: 'center' }}>
+        <button 
+          className="btn btn-green" 
+          style={{ 
+            padding: '10px 30px', 
+            fontSize: '14px', 
+            borderRadius: '6px', 
+            display: 'flex', 
+            alignItems: 'center', 
+            gap: '8px',
+            boxShadow: '0 4px 12px rgba(22, 163, 74, 0.3)' 
+          }} 
+          onClick={printReport}
+        >
+          <span>⬇</span> Download PDF
         </button>
-        <div className="divider"></div>
-        <button className={`mic-btn ${isGlobalRecording ? 'recording' : ''}`} id="globalMicBtn" onClick={toggleGlobalRecording} title="Voice record for all fields">
-          🎤
-        </button>
-        {isGlobalRecording && <span className="timer" id="globalTimer">{formatTime(globalTimer)}</span>}
-        <div className="divider"></div>
-        <button className="btn btn-green" onClick={printReport}>⬇ Print / Save PDF</button>
       </div>
 
       {/* A4 PAGE */}
