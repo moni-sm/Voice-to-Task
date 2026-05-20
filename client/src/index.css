@@ -1,3 +1,7 @@
+*, ::before, ::after {
+  box-sizing: border-box;
+}
+
 @tailwind base;
 @tailwind components;
 @tailwind utilities;
@@ -231,6 +235,7 @@
   padding: 0 8px;
   height: 100%;
   font-family: Arial, sans-serif;
+  min-width: 0;
 }
 
 .mic-row-btn {
@@ -399,16 +404,50 @@
 
 @media screen and (max-width: 768px) {
   .info-row { flex-direction: column; }
-  .address-cell { width: 100%; border-right: none; border-bottom: 1.5px solid #000; }
+  .address-cell { width: 100%; border-right: none; border-bottom: 1.5px solid #000; padding: 10px; }
   .fields-cell { width: 100%; }
-  .signatures { flex-direction: column; gap: 30px; }
+  .signatures { flex-direction: column; gap: 20px; padding: 0 10px; margin-top: 30px; }
   .sig-block { max-width: 100%; }
-  .header { flex-direction: column; gap: 15px; align-items: center; text-align: center; }
-  .header-right { text-align: center; }
+  .header { flex-direction: column; gap: 12px; align-items: center; text-align: center; }
+  .header-right { text-align: center; margin-top: 5px; }
   .tagline { margin-left: 0; }
-  .a4-page { padding: 15px 10px; }
+  .a4-page { padding: 15px 8px; }
   .voice-modal { min-width: 280px; padding: 20px; }
   .sig-modal { width: 95%; max-width: 480px; padding: 16px; }
+  .th-sl, .sl-col { width: 10% !important; }
+}
+
+@media screen and (max-width: 480px) {
+  body {
+    padding: 10px 4px !important;
+  }
+  .field-row {
+    flex-direction: column;
+    align-items: flex-start;
+    height: auto;
+    padding: 6px 8px;
+    gap: 2px;
+  }
+  .field-label {
+    min-width: unset;
+    font-size: 12px;
+  }
+  .field-input {
+    width: 100%;
+    font-size: 13px;
+  }
+  .a4-page {
+    padding: 10px 4px;
+  }
+  .sig-pad-area {
+    height: 70px;
+  }
+  .brand-name {
+    font-size: 28px;
+  }
+  .company-name {
+    font-size: 18px;
+  }
 }
 
 @media print {
