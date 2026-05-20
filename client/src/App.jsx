@@ -1,6 +1,32 @@
-import React, { useState, useEffect, useRef } from 'react';
+import React, { useState, useEffect, useRef, useCallback } from 'react';
 
 const NUM_TASKS = 14;
+const API_URL = import.meta.env.VITE_API_URL || 'https://voice-to-task.onrender.com';
+
+// Auto-growing textarea that resizes to fit its content
+function TaskTextarea({ value, placeholder, onChange }) {
+  const ref = useRef(null);
+
+  useEffect(() => {
+    if (ref.current) {
+      ref.current.style.height = 'auto';
+      ref.current.style.height = ref.current.scrollHeight + 'px';
+    }
+  }, [value]);
+
+  return (
+    <textarea
+      ref={ref}
+      className="task-input"
+      placeholder={placeholder}
+      value={value}
+      rows={1}
+      onChange={e => onChange(e.target.value)}
+    />
+  );
+}
+
+
 
 function App() {
   const [form, setForm] = useState({
@@ -12,21 +38,29 @@ function App() {
     followUpRequired: ''
   });
 
-  const [aiText, setAiText] = useState("");
-  const [isGlobalRecording, setIsGlobalRecording] = useState(false);
-  const [globalTimer, setGlobalTimer] = useState(0);
-  const [processingIdx, setProcessingIdx] = useState(null);
-  const globalTimerRef = useRef(null);
+  // ── CHAT STATE ──
+  const [chatMessages, setChatMessages] = useState([
+    {
+      role: 'ai',
+      text: null,
+      data: null,
+      aiFormatted: null,
+      accepted: false,
+      id: 'welcome'
+    }
+  ]);
+  const [chatInput, setChatInput] = useState('');
+  const [isChatProcessing, setIsChatProcessing] = useState(false);
+  const [isChatRecording, setIsChatRecording] = useState(false);
+  const [chatTimer, setChatTimer] = useState(0);
+  // 'report' = waiting for user to describe service | 'metadata' = waiting for site/date/names
+  const [chatMode, setChatMode] = useState('report');
+  const [pendingReportData, setPendingReportData] = useState(null);
+  const chatEndRef = useRef(null);
+  const chatTimerRef = useRef(null);
+  const chatRecognitionRef = useRef(null);
 
-  // Row Recording
-  const [activeRow, setActiveRow] = useState(0);
-  const [rowRecording, setRowRecording] = useState(false);
-  const [currentRowIdx, setCurrentRowIdx] = useState(null);
-  const [rowTimer, setRowTimer] = useState(0);
-  const [rowTranscript, setRowTranscript] = useState('Listening…');
-  const rowTimerRef = useRef(null);
-  const rowRecognitionRef = useRef(null);
-  const globalRecognitionRef = useRef(null);
+  const [isGeneratingPdf, setIsGeneratingPdf] = useState(false);
 
   // Signatures
   const [sigData, setSigData] = useState([null, null]);
@@ -35,12 +69,12 @@ function App() {
   const [sigModalOpen, setSigModalOpen] = useState(false);
   const [currentSigIdx, setCurrentSigIdx] = useState(null);
   const [sigHasContent, setSigHasContent] = useState(false);
-  
+
   const sigModalCanvasRef = useRef(null);
   const sigModalCtxRef = useRef(null);
   const isDrawingRef = useRef(false);
 
-  // Scaling refs & state for responsive layout preservation on mobile
+  // Scaling
   const [scale, setScale] = useState(1);
   const [pageHeight, setPageHeight] = useState(1123);
   const containerRef = useRef(null);
@@ -48,33 +82,45 @@ function App() {
 
   useEffect(() => {
     return () => {
-      clearInterval(globalTimerRef.current);
-      clearInterval(rowTimerRef.current);
-      if (globalRecognitionRef.current) globalRecognitionRef.current.stop();
-      if (rowRecognitionRef.current) rowRecognitionRef.current.stop();
+      clearInterval(chatTimerRef.current);
+      if (chatRecognitionRef.current) chatRecognitionRef.current.stop();
     };
   }, []);
 
+  // Freeze scroll when modal open
+  useEffect(() => {
+    if (sigModalOpen) {
+      document.body.classList.add('modal-open');
+    } else {
+      document.body.classList.remove('modal-open');
+    }
+    return () => document.body.classList.remove('modal-open');
+  }, [sigModalOpen]);
+
+  // Scaling
   useEffect(() => {
     const handleResize = () => {
       if (!containerRef.current || !a4PageRef.current) return;
       const containerWidth = containerRef.current.offsetWidth;
-      const pageWidth = 794; // approx 210mm in pixels
+      const pageWidth = 794;
       let currentScale = 1;
-      if (containerWidth < pageWidth) {
-        currentScale = containerWidth / pageWidth;
-      }
+      if (containerWidth < pageWidth) currentScale = containerWidth / pageWidth;
       setScale(currentScale);
       setPageHeight(a4PageRef.current.offsetHeight);
     };
-
     const observer = new ResizeObserver(() => handleResize());
     if (containerRef.current) observer.observe(containerRef.current);
     if (a4PageRef.current) observer.observe(a4PageRef.current);
-
     handleResize();
     return () => observer.disconnect();
   }, []);
+
+  // Auto-scroll chat
+  useEffect(() => {
+    chatEndRef.current?.scrollIntoView({ behavior: 'smooth' });
+  }, [chatMessages]);
+
+  const formatTime = (s) => `${Math.floor(s / 60)}:${(s % 60).toString().padStart(2, '0')}`;
 
   const handleFieldChange = (field, value) => {
     setForm(prev => ({ ...prev, [field]: value }));
@@ -86,27 +132,14 @@ function App() {
     setForm(prev => ({ ...prev, tasks: newTasks }));
   };
 
-  const formatTime = (s) => {
-    return `${Math.floor(s / 60)}:${(s % 60).toString().padStart(2, '0')}`;
-  };
-
-
-  // ── GLOBAL RECORDING ──
-  const toggleGlobalRecording = () => {
-    if (isGlobalRecording) stopGlobalRecording();
-    else startGlobalRecording();
-  };
-
-  const startGlobalRecording = () => {
+  // ── CHAT RECORDING (auto-send after stop) ──
+  const startChatRecording = () => {
     const SR = window.SpeechRecognition || window.webkitSpeechRecognition;
-    if (!SR) { alert("Speech recognition not supported in this browser."); return; }
-    
-    setIsGlobalRecording(true);
-    setGlobalTimer(0);
+    if (!SR) { alert('Speech recognition not supported in this browser.'); return; }
 
-    globalTimerRef.current = setInterval(() => {
-      setGlobalTimer(t => t + 1);
-    }, 1000);
+    setIsChatRecording(true);
+    setChatTimer(0);
+    chatTimerRef.current = setInterval(() => setChatTimer(t => t + 1), 1000);
 
     const recognition = new SR();
     recognition.lang = 'en-IN';
@@ -119,44 +152,240 @@ function App() {
         if (e.results[i].isFinal) transcript += e.results[i][0].transcript + ' ';
       }
     };
-    recognition.onerror = () => stopGlobalRecording(transcript);
-    recognition.onend = () => {
-      if (isGlobalRecording) stopGlobalRecording(transcript);
-    };
+    recognition.onerror = () => stopChatRecording(transcript);
+    recognition.onend = () => stopChatRecording(transcript);
     recognition.start();
-    globalRecognitionRef.current = recognition;
-    globalRecognitionRef.current._getTranscript = () => transcript;
+    chatRecognitionRef.current = recognition;
+    chatRecognitionRef.current._getTranscript = () => transcript;
   };
 
-  const stopGlobalRecording = (tr) => {
-    setIsGlobalRecording(false);
-    clearInterval(globalTimerRef.current);
-    if (globalRecognitionRef.current) {
-      try { globalRecognitionRef.current.stop(); } catch(e){}
+  const stopChatRecording = (tr) => {
+    setIsChatRecording(false);
+    clearInterval(chatTimerRef.current);
+    if (chatRecognitionRef.current) {
+      try { chatRecognitionRef.current.stop(); } catch(e) {}
     }
-    
-    const transcript = tr || (globalRecognitionRef.current && globalRecognitionRef.current._getTranscript ? globalRecognitionRef.current._getTranscript() : '');
+    const transcript = tr || (chatRecognitionRef.current?._getTranscript?.() || '');
     if (transcript.trim()) {
-      setAiText(transcript.trim());
-      handleImprovise(transcript.trim());
+      sendChatMessage(transcript.trim());
     }
   };
 
-  // ── ROW RECORDING ──
-  const startRowRecording = (idx) => {
-    if (rowRecording) { stopRowRecording(); return; }
+  // ── SEND CHAT MESSAGE ──
+  const sendChatMessage = async (overrideText) => {
+    const text = overrideText || chatInput.trim();
+    if (!text) return;
+    setChatInput('');
+
+    // ── METADATA MODE: user is answering the site/date/names question ──
+    if (chatMode === 'metadata') {
+      const userMsg = { role: 'user', text, id: Date.now() };
+      setChatMessages(prev => [...prev, userMsg]);
+
+      // Parse the user's answer by sending it to the AI to extract metadata fields
+      setIsChatProcessing(true);
+      const thinkingId = 'thinking-meta-' + Date.now();
+      setChatMessages(prev => [...prev, { role: 'ai', text: null, data: null, aiFormatted: null, accepted: false, id: thinkingId }]);
+
+      try {
+        const formData = new FormData();
+        formData.append('text', text);
+        const response = await fetch(`${API_URL}/api/process`, { method: 'POST', body: formData });
+        if (!response.ok) throw new Error('Server error');
+        const metaData = await response.json();
+
+        // Merge metadata into the pending report data
+        const merged = {
+          ...pendingReportData,
+          site: metaData.site || pendingReportData?.site || '',
+          date: metaData.date || pendingReportData?.date || '',
+          customerRep: metaData.customerRep || pendingReportData?.customerRep || '',
+          zeeSenseRep: metaData.zeeSenseRep || pendingReportData?.zeeSenseRep || '',
+        };
+
+        // Show a confirmation bubble with Accept button carrying merged data
+        const confirmText = [
+          merged.site       ? `📍 Site: ${merged.site}` : null,
+          merged.date       ? `📅 Date: ${merged.date}` : null,
+          merged.customerRep ? `👤 Customer Rep: ${merged.customerRep}` : null,
+          merged.zeeSenseRep ? `🔧 Engineer: ${merged.zeeSenseRep}` : null,
+          '\nAll done! Click Accept to fill the complete report.',
+        ].filter(Boolean).join('\n');
+
+        // Get the original formatted text from pending
+        const originalFormatted = pendingReportData?._aiFormatted || '';
+
+        setChatMessages(prev => prev.map(m =>
+          m.id === thinkingId
+            ? { ...m, text: confirmText, data: merged, aiFormatted: originalFormatted, accepted: false }
+            : m
+        ));
+
+        setChatMode('report');
+        setPendingReportData(null);
+      } catch (e) {
+        setChatMessages(prev => prev.map(m =>
+          m.id === thinkingId
+            ? { ...m, text: '❌ Could not process details. Please try again.', data: null }
+            : m
+        ));
+      } finally {
+        setIsChatProcessing(false);
+      }
+      return;
+    }
+
+    // ── REPORT MODE: user is describing the service visit ──
+    const userMsg = { role: 'user', text, id: Date.now() };
+    setChatMessages(prev => [...prev, userMsg]);
+    setIsChatProcessing(true);
+
+    const thinkingMsg = { role: 'ai', text: null, data: null, aiFormatted: null, accepted: false, id: 'thinking-' + Date.now() };
+    setChatMessages(prev => [...prev, thinkingMsg]);
+
+    try {
+      const formData = new FormData();
+      formData.append('text', text);
+
+      const response = await fetch(`${API_URL}/api/process`, {
+        method: 'POST',
+        body: formData,
+      });
+
+      if (!response.ok) throw new Error('Server error');
+      const data = await response.json();
+
+      const aiFormatted = formatAiResponse(data);
+
+      setChatMessages(prev => prev.map(m =>
+        m.id === thinkingMsg.id
+          ? { ...m, text: aiFormatted, data, aiFormatted, accepted: false }
+          : m
+      ));
+
+      // After showing structured tasks, automatically ask for missing header details
+      const missingFields = [];
+      if (!data.site)        missingFields.push('site name');
+      if (!data.date)        missingFields.push('date');
+      if (!data.customerRep) missingFields.push('customer representative name');
+      if (!data.zeeSenseRep) missingFields.push('your name (ZeeSense engineer)');
+
+      if (missingFields.length > 0) {
+        // Store the report data and switch to metadata collection mode
+        setPendingReportData({ ...data, _aiFormatted: aiFormatted });
+        setChatMode('metadata');
+
+        const askMsg = {
+          role: 'ai',
+          text: `📋 Got the report details! Before you accept, please share:\n${missingFields.map((f, i) => `${i + 1}. ${f}`).join('\n')}\n\nYou can reply in one line, e.g.: "Site: ABC Tower, Date: 20/05/2026, Customer: John, Engineer: Ravi"`,
+          data: null,
+          aiFormatted: null,
+          accepted: false,
+          isAsk: true,
+          id: 'ask-meta-' + Date.now()
+        };
+        setChatMessages(prev => [...prev, askMsg]);
+      }
+
+    } catch (e) {
+      setChatMessages(prev => prev.map(m =>
+        m.id === thinkingMsg.id
+          ? { ...m, text: '\u274c Failed to process. Please try again.', data: null }
+          : m
+      ));
+    } finally {
+      setIsChatProcessing(false);
+    }
+  };
+
+  const formatAiResponse = (data) => {
+    // Only include task lines in the chat bubble — followUpRequired is handled separately in the A4 form
+    const lines = [];
+    if (data.tasks && data.tasks.length > 0) {
+      data.tasks.forEach(t => {
+        if (t.description && t.description.trim()) lines.push(t.description.trim());
+      });
+    }
+    return lines.join('\n');
+  };
+
+  // ── ACCEPT CHAT RESPONSE ──
+  // Uses the exact displayed text from the chat bubble (aiFormatted) split line-by-line
+  // so that what you SEE in the chat is exactly what fills the form rows.
+  const acceptChatResponse = (msgId, data, aiFormatted) => {
+    if (!data) return;
+
+    setForm(prev => {
+      const newForm = { ...prev };
+
+      // Fill header metadata fields from structured data
+      if (data.site) newForm.site = data.site;
+      if (data.date) newForm.date = data.date;
+      if (data.customerRep) newForm.customerRep = data.customerRep;
+      if (data.zeeSenseRep) newForm.zeeSenseRep = data.zeeSenseRep;
+      // Note: followUpRequired is intentionally NOT filled from chat.
+      // User fills it separately using the mic/enhance buttons in the A4 form.
+
+      // Split every visible line from the chat bubble into separate rows
+      // This ensures exact 1:1 match between what user sees and what fills the form
+      if (aiFormatted) {
+        const lines = aiFormatted
+          .split('\n')
+          .map(l => l.trim())
+          .filter(l => l.length > 0);
+
+        // Start with enough blank rows (at least NUM_TASKS)
+        const freshTasks = Array.from(
+          { length: Math.max(NUM_TASKS, lines.length) },
+          () => ({ description: '' })
+        );
+
+        lines.forEach((line, i) => {
+          freshTasks[i].description = line;
+        });
+
+        newForm.tasks = freshTasks;
+      } else if (data.tasks && data.tasks.length > 0) {
+        // Fallback: use structured task list if no formatted text available
+        const freshTasks = Array.from(
+          { length: Math.max(NUM_TASKS, data.tasks.length) },
+          () => ({ description: '' })
+        );
+        data.tasks.forEach((t, i) => {
+          freshTasks[i].description = (t.description || t || '').trim();
+        });
+        newForm.tasks = freshTasks;
+      }
+
+      return newForm;
+    });
+
+    setChatMessages(prev => prev.map(m =>
+      m.id === msgId ? { ...m, accepted: true } : m
+    ));
+  };
+
+  const discardChatResponse = (msgId) => {
+    setChatMessages(prev => prev.map(m =>
+      m.id === msgId ? { ...m, accepted: 'discarded' } : m
+    ));
+  };
+
+  // ── FOLLOW-UP MIC & ENHANCE ──
+  const [followupRecording, setFollowupRecording] = useState(false);
+  const [followupEnhancing, setFollowupEnhancing] = useState(false);
+  const followupRecognitionRef = useRef(null);
+
+  const startFollowupRecording = () => {
     const SR = window.SpeechRecognition || window.webkitSpeechRecognition;
-    if (!SR) { alert("Speech recognition not supported. Please type."); return; }
+    if (!SR) { alert('Speech recognition not supported.'); return; }
+    if (followupRecording) {
+      followupRecognitionRef.current?.stop();
+      setFollowupRecording(false);
+      return;
+    }
 
-    setCurrentRowIdx(idx);
-    setRowRecording(true);
-    setRowTimer(0);
-    setRowTranscript('Listening…');
-
-    rowTimerRef.current = setInterval(() => {
-      setRowTimer(t => t + 1);
-    }, 1000);
-
+    setFollowupRecording(true);
     const recognition = new SR();
     recognition.lang = 'en-IN';
     recognition.interimResults = true;
@@ -169,105 +398,84 @@ function App() {
         if (e.results[i].isFinal) finalText += e.results[i][0].transcript + ' ';
         else interim = e.results[i][0].transcript;
       }
-      setRowTranscript(finalText + interim);
-      if (idx === 'followup') {
-        handleFieldChange('followUpRequired', (finalText + interim).trim());
-      } else {
-        handleTaskChange(idx, (finalText + interim).trim());
-      }
+      handleFieldChange('followUpRequired', (finalText + interim).trim());
     };
-    recognition.onerror = () => stopRowRecording();
+    recognition.onerror = () => setFollowupRecording(false);
+    recognition.onend = () => setFollowupRecording(false);
     recognition.start();
-    rowRecognitionRef.current = recognition;
+    followupRecognitionRef.current = recognition;
   };
 
-  const stopRowRecording = () => {
-    setRowRecording(false);
-    clearInterval(rowTimerRef.current);
-    if (rowRecognitionRef.current) {
-      try { rowRecognitionRef.current.stop(); } catch(e){}
-    }
-
-    let textToImprovise = '';
-    if (currentRowIdx === 'followup') textToImprovise = form.followUpRequired;
-    else if (currentRowIdx !== null) textToImprovise = form.tasks[currentRowIdx].description;
-
-    if (textToImprovise.trim() && textToImprovise !== 'Listening…') {
-      handleImprovise(textToImprovise, currentRowIdx);
-    }
-
-    setCurrentRowIdx(null);
-  };
-
-  // ── AI IMPROVISE ──
-  const handleImprovise = async (textToUse, targetIdx = null) => {
-    const text = typeof textToUse === 'string' ? textToUse : aiText;
-    if (!text.trim()) return;
-    setProcessingIdx(targetIdx === null ? 'global' : targetIdx);
-
-    const formData = new FormData();
-    formData.append('text', text);
-
+  const enhanceFollowup = async () => {
+    if (!form.followUpRequired.trim()) return;
+    setFollowupEnhancing(true);
     try {
-      const apiUrl = import.meta.env.VITE_API_URL || 'https://voice-to-task.onrender.com';
-      const response = await fetch(`${apiUrl}/api/process`, {
-        method: 'POST',
-        body: formData,
-      });
-      if (!response.ok) throw new Error("Server failed");
+      const formData = new FormData();
+      formData.append('text', 'Follow-up for service report: ' + form.followUpRequired);
+      const response = await fetch(`${API_URL}/api/process`, { method: 'POST', body: formData });
+      if (!response.ok) throw new Error('Server error');
       const data = await response.json();
-
-      setForm(prev => {
-        const newForm = { ...prev };
-        
-        if (targetIdx === 'followup') {
-          if (data.followUpRequired) newForm.followUpRequired = data.followUpRequired;
-          else if (data.tasks && data.tasks.length > 0) newForm.followUpRequired = data.tasks.map(t => t.description || t).join('\n');
-        } else if (typeof targetIdx === 'number') {
-          if (data.tasks && data.tasks.length > 0) {
-            const mergedTasks = [...prev.tasks];
-            for(let i=0; i<data.tasks.length; i++) {
-              if(targetIdx + i < mergedTasks.length) {
-                  mergedTasks[targetIdx + i].description = data.tasks[i].description || data.tasks[i];
-              }
-            }
-            newForm.tasks = mergedTasks;
-          }
-        } else {
-          // Global Update
-          if (data.site) newForm.site = data.site;
-          if (data.date) newForm.date = data.date;
-          if (data.customerRep) newForm.customerRep = data.customerRep;
-          if (data.zeeSenseRep) newForm.zeeSenseRep = data.zeeSenseRep;
-          if (data.followUpRequired) newForm.followUpRequired = data.followUpRequired;
-          
-          if (data.tasks && data.tasks.length > 0) {
-            const mergedTasks = [...prev.tasks];
-            for(let i=0; i<data.tasks.length; i++) {
-              if(i < mergedTasks.length) {
-                  mergedTasks[i].description = data.tasks[i].description || data.tasks[i];
-              }
-            }
-            newForm.tasks = mergedTasks;
-          }
-        }
-        return newForm;
-      });
-
-      if (targetIdx === null) setAiText('');
-      setProcessingIdx('done-' + (targetIdx === null ? 'global' : targetIdx));
-      setTimeout(() => setProcessingIdx(null), 2500);
+      if (data.followUpRequired) {
+        handleFieldChange('followUpRequired', data.followUpRequired);
+      } else if (data.tasks && data.tasks.length > 0) {
+        handleFieldChange('followUpRequired', data.tasks.map(t => t.description || t).join('\n'));
+      }
     } catch (e) {
-      setProcessingIdx('error-' + (targetIdx === null ? 'global' : targetIdx));
       console.error(e);
-      setTimeout(() => setProcessingIdx(null), 2500);
+    } finally {
+      setFollowupEnhancing(false);
     }
   };
 
-  const printReport = () => {
-    window.print();
+  // ── PDF DOWNLOAD ──
+  const downloadPdf = async () => {
+    setIsGeneratingPdf(true);
+    try {
+      const payload = {
+        site: form.site,
+        date: form.date,
+        customerRep: form.customerRep,
+        zeeSenseRep: form.zeeSenseRep,
+        tasks: form.tasks
+          .map((t, i) => ({ slNo: i + 1, description: t.description }))
+          .filter(t => t.description.trim() !== ''),
+        followUpRequired: form.followUpRequired,
+        signatures: sigData
+      };
+
+      const response = await fetch(`${API_URL}/api/generate-pdf`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify(payload),
+      });
+
+      if (!response.ok) throw new Error('Failed to generate PDF');
+      const result = await response.json();
+
+      if (result.pdf_url) {
+        const pdfUrl = result.pdf_url.startsWith('http') ? result.pdf_url : `${API_URL}${result.pdf_url}`;
+        const pdfResponse = await fetch(pdfUrl);
+        const blob = await pdfResponse.blob();
+        const blobUrl = URL.createObjectURL(blob);
+        const link = document.createElement('a');
+        link.href = blobUrl;
+        link.download = `ZeeSense_Report_${Date.now()}.pdf`;
+        document.body.appendChild(link);
+        link.click();
+        document.body.removeChild(link);
+        setTimeout(() => URL.revokeObjectURL(blobUrl), 100);
+      } else {
+        alert('Failed to get PDF URL');
+      }
+    } catch (error) {
+      console.error(error);
+      alert('Error generating PDF: ' + error.message);
+    } finally {
+      setIsGeneratingPdf(false);
+    }
   };
 
+  // ── MOUSE HANDLERS ──
   const getPos = (e, canvas) => {
     const r = canvas.getBoundingClientRect();
     const scaleX = canvas.width / r.width;
@@ -300,7 +508,7 @@ function App() {
 
   const handleMouseUp = () => { isDrawingRef.current = false; };
 
-  // ── SIGNATURES ──
+  // ── SIGNATURE CANVAS ──
   useEffect(() => {
     if (sigModalOpen && sigModalCanvasRef.current) {
       const canvas = sigModalCanvasRef.current;
@@ -314,12 +522,9 @@ function App() {
         ctx.lineWidth = 2.2;
         ctx.lineCap = 'round';
         ctx.lineJoin = 'round';
-
         if (sigData[currentSigIdx]) {
           const img = new Image();
-          img.onload = () => {
-            ctx.drawImage(img, 0, 0, canvas.width, canvas.height);
-          };
+          img.onload = () => ctx.drawImage(img, 0, 0, canvas.width, canvas.height);
           img.src = sigData[currentSigIdx];
         }
       };
@@ -327,25 +532,19 @@ function App() {
       initCanvas();
       setSigHasContent(!!sigData[currentSigIdx]);
 
-      // Handle screen resize/rotation on mobile
       const handleResize = () => {
         const dataURL = canvas.toDataURL();
         canvas.width = canvas.parentElement.offsetWidth || 432;
         canvas.height = 180;
-        
         ctx.strokeStyle = '#1a1a2e';
         ctx.lineWidth = 2.2;
         ctx.lineCap = 'round';
         ctx.lineJoin = 'round';
-
         const img = new Image();
-        img.onload = () => {
-          ctx.drawImage(img, 0, 0, canvas.width, canvas.height);
-        };
+        img.onload = () => ctx.drawImage(img, 0, 0, canvas.width, canvas.height);
         img.src = dataURL;
       };
 
-      // Define touch event listeners manually with { passive: false } to prevent browser scroll warnings and page dragging
       const handleTouchStartEvent = (e) => {
         e.preventDefault();
         isDrawingRef.current = true;
@@ -363,15 +562,13 @@ function App() {
         ctx.stroke();
       };
 
-      const handleTouchEndEvent = () => {
-        isDrawingRef.current = false;
-      };
+      const handleTouchEndEvent = () => { isDrawingRef.current = false; };
 
       canvas.addEventListener('touchstart', handleTouchStartEvent, { passive: false });
       canvas.addEventListener('touchmove', handleTouchMoveEvent, { passive: false });
       canvas.addEventListener('touchend', handleTouchEndEvent);
-
       window.addEventListener('resize', handleResize);
+
       return () => {
         window.removeEventListener('resize', handleResize);
         canvas.removeEventListener('touchstart', handleTouchStartEvent);
@@ -381,15 +578,8 @@ function App() {
     }
   }, [sigModalOpen, currentSigIdx, sigData]);
 
-  const openSigModal = (idx) => {
-    setCurrentSigIdx(idx);
-    setSigModalOpen(true);
-  };
-
-  const closeSigModal = () => {
-    setSigModalOpen(false);
-    setCurrentSigIdx(null);
-  };
+  const openSigModal = (idx) => { setCurrentSigIdx(idx); setSigModalOpen(true); };
+  const closeSigModal = () => { setSigModalOpen(false); setCurrentSigIdx(null); };
 
   const clearModalCanvas = () => {
     if (sigModalCtxRef.current && sigModalCanvasRef.current) {
@@ -399,21 +589,15 @@ function App() {
   };
 
   const confirmSig = () => {
-    if (!sigHasContent) {
-      closeSigModal();
-      return;
-    }
+    if (!sigHasContent) { closeSigModal(); return; }
     const dataURL = sigModalCanvasRef.current.toDataURL('image/png');
-    
     const newSigData = [...sigData];
     newSigData[currentSigIdx] = dataURL;
     setSigData(newSigData);
-
     const now = new Date();
     const newSigTimes = [...sigTimes];
     newSigTimes[currentSigIdx] = `Signed ${now.toLocaleDateString('en-IN')} ${now.toLocaleTimeString('en-IN', {hour:'2-digit',minute:'2-digit'})}`;
     setSigTimes(newSigTimes);
-
     closeSigModal();
   };
 
@@ -421,35 +605,183 @@ function App() {
     const newSigData = [...sigData];
     newSigData[idx] = null;
     setSigData(newSigData);
-
     const newSigTimes = [...sigTimes];
     newSigTimes[idx] = '';
     setSigTimes(newSigTimes);
+  };
+
+  // ── RENDER CHAT BUBBLE TEXT ──
+  const renderAiBubble = (text) => {
+    if (!text) return null;
+    return text.split('\n').map((line, i) => {
+      if (!line.trim()) return <div key={i} style={{height: 6}} />;
+      const colonIdx = line.indexOf(':');
+      if (colonIdx > 0 && colonIdx < 40) {
+        const label = line.slice(0, colonIdx);
+        const rest = line.slice(colonIdx + 1).trim();
+        return (
+          <div key={i} className="chat-bullet">
+            <span className="chat-bullet-dot">•</span>
+            <span>
+              <strong className="chat-label">{label}:</strong>
+              {rest ? ` ${rest}` : ''}
+            </span>
+          </div>
+        );
+      }
+      return (
+        <div key={i} className="chat-line">{line}</div>
+      );
+    });
   };
 
   return (
     <>
       {/* TOOLBAR */}
       <div className="toolbar" style={{ justifyContent: 'center' }}>
-        <button 
-          className="btn btn-green" 
-          style={{ 
-            padding: '10px 30px', 
-            fontSize: '14px', 
-            borderRadius: '6px', 
-            display: 'flex', 
-            alignItems: 'center', 
+        <button
+          className="btn btn-green"
+          style={{
+            padding: '10px 30px',
+            fontSize: '14px',
+            borderRadius: '6px',
+            display: 'flex',
+            alignItems: 'center',
             gap: '8px',
-            boxShadow: '0 4px 12px rgba(22, 163, 74, 0.3)' 
-          }} 
-          onClick={printReport}
+            boxShadow: '0 4px 12px rgba(22, 163, 74, 0.3)'
+          }}
+          onClick={downloadPdf}
+          disabled={isGeneratingPdf}
         >
-          <span>⬇</span> Download PDF
+          {isGeneratingPdf ? (
+            <>
+              <div className="spinner" style={{width: 16, height: 16, borderWidth: 2}}></div>
+              Generating...
+            </>
+          ) : (
+            <>
+              <span>⬇</span> Download PDF
+            </>
+          )}
         </button>
       </div>
 
+      {/* CHAT PANEL */}
+      <div className="chat-panel">
+        <div className="chat-header">
+          <span className="chat-header-icon">🤖</span>
+          <div>
+            <div className="chat-header-title">ZeeSense AI Assistant</div>
+            <div className="chat-header-sub">Describe your service visit and I'll structure it for you</div>
+          </div>
+        </div>
+
+        <div className="chat-messages">
+          {/* Welcome message */}
+          <div className="chat-bubble chat-bubble-ai" style={{opacity: 0.85}}>
+            <div className="chat-line">👋 Hi! Describe your service visit in plain language (typed or spoken) and I'll convert it into a structured service report with elaborated points.</div>
+            <div className="chat-line" style={{marginTop: 6, fontSize: '0.82em', color: '#a0c4ff'}}>Example: <em>"I went to site, lift cameras not working, restarted switch in LMR room, now working..."</em></div>
+          </div>
+
+          {chatMessages.filter(m => m.id !== 'welcome').map((msg) => (
+            <div key={msg.id}>
+              {msg.role === 'user' && (
+                <div className="chat-bubble chat-bubble-user">
+                  {msg.text}
+                </div>
+              )}
+              {msg.role === 'ai' && (
+                <div className="chat-bubble-ai-wrap">
+                  {msg.isAsk ? (
+                    // Special "ask" bubble — visually distinct, no accept/discard
+                    <div className="chat-bubble-ask">
+                      {msg.text === null ? (
+                        <div className="chat-thinking"><span></span><span></span><span></span></div>
+                      ) : (
+                        renderAiBubble(msg.text)
+                      )}
+                    </div>
+                  ) : (
+                    // Normal AI task bubble
+                    <div className={`chat-bubble chat-bubble-ai ${msg.accepted === true ? 'accepted' : msg.accepted === 'discarded' ? 'discarded' : ''}`}>
+                      {msg.text === null ? (
+                        <div className="chat-thinking">
+                          <span></span><span></span><span></span>
+                        </div>
+                      ) : (
+                        renderAiBubble(msg.text)
+                      )}
+                    </div>
+                  )}
+                  {msg.data && msg.accepted === false && !msg.isAsk && (
+                    <div className="chat-actions">
+                      <button
+                        className="chat-action-btn accept"
+                        onClick={() => acceptChatResponse(msg.id, msg.data, msg.aiFormatted)}
+                      >
+                        ✓ Accept — Fill Report
+                      </button>
+                      <button
+                        className="chat-action-btn discard"
+                        onClick={() => discardChatResponse(msg.id)}
+                      >
+                        ✕ Discard
+                      </button>
+                    </div>
+                  )}
+                  {msg.accepted === true && (
+                    <div className="chat-accepted-badge">✓ Applied to report</div>
+                  )}
+                  {msg.accepted === 'discarded' && (
+                    <div className="chat-discarded-badge">✕ Discarded</div>
+                  )}
+                </div>
+              )}
+
+            </div>
+          ))}
+          <div ref={chatEndRef} />
+        </div>
+
+        <div className={`chat-input-row ${chatMode === 'metadata' ? 'metadata-mode' : ''}`}>
+          <textarea
+            className="chat-textarea"
+            placeholder={chatMode === 'metadata'
+              ? 'Reply with site, date, customer name, engineer name… or 🎤'
+              : 'Describe your service visit here… or use 🎤'}
+            value={chatInput}
+            onChange={e => setChatInput(e.target.value)}
+            onKeyDown={e => {
+              if (e.key === 'Enter' && !e.shiftKey) {
+                e.preventDefault();
+                sendChatMessage();
+              }
+            }}
+            rows={2}
+            disabled={isChatProcessing || isChatRecording}
+          />
+          <div className="chat-input-btns">
+            <button
+              className={`chat-mic-btn ${isChatRecording ? 'recording' : ''}`}
+              onClick={isChatRecording ? () => stopChatRecording(chatRecognitionRef.current?._getTranscript?.() || '') : startChatRecording}
+              title={isChatRecording ? `Stop recording (${formatTime(chatTimer)})` : 'Record voice'}
+              disabled={isChatProcessing}
+            >
+              {isChatRecording ? <><span className="rec-dot"></span>{formatTime(chatTimer)}</> : '🎤'}
+            </button>
+            <button
+              className="chat-send-btn"
+              onClick={() => sendChatMessage()}
+              disabled={isChatProcessing || isChatRecording || !chatInput.trim()}
+            >
+              {isChatProcessing ? <div className="spinner" style={{width: 16, height: 16, borderWidth: 2}}></div> : '➤'}
+            </button>
+          </div>
+        </div>
+      </div>
+
       {/* A4 PAGE CONTAINER */}
-      <div 
+      <div
         ref={containerRef}
         className="a4-container"
         style={{
@@ -462,9 +794,9 @@ function App() {
           padding: scale < 1 ? '0' : '0 10px',
         }}
       >
-        <div 
+        <div
           ref={a4PageRef}
-          className="a4-page" 
+          className="a4-page"
           id="a4Page"
           style={scale < 1 ? {
             transform: `scale(${scale})`,
@@ -529,85 +861,70 @@ function App() {
             <div className="th-desc">Task Description</div>
           </div>
 
-          {/* TASKS BODY */}
-          <div className="tasks-body">
-            <div className="sl-col" id="slCol">
-              {form.tasks.map((t, i) => (
-                <div key={i} className={`task-row-sl ${!t.description.trim() ? 'empty-task' : ''}`}>{i + 1}</div>
-              ))}
-            </div>
-            <div className="desc-col" id="descCol">
-              {form.tasks.map((t, i) => (
-                <div key={i} className={`task-row-input-wrap ${!t.description.trim() ? 'empty-task' : ''}`}>
-                  <input 
-                    type="text" 
-                    className="task-input" 
-                    placeholder={i === 0 ? 'Type task or click 🎤 to speak…' : ''}
+          {/* TASKS BODY - unified rows so sl and desc grow together */}
+          <div className="tasks-body-unified" id="tasksBody">
+            {form.tasks.map((t, i) => (
+              <div key={i} className={`task-row-unified ${!t.description.trim() ? 'empty-task' : ''}`}>
+                <div className="task-row-sl-cell">{i + 1}</div>
+                <div className="task-row-desc-cell">
+                  <TaskTextarea
                     value={t.description}
-                    onChange={e => handleTaskChange(i, e.target.value)}
-                    onFocus={() => setActiveRow(i)}
+                    placeholder={i === 0 ? 'Accept from chat or type here…' : ''}
+                    onChange={val => handleTaskChange(i, val)}
                   />
-                  {activeRow === i && (
-                    <>
-                      <button 
-                        className={`mic-row-btn ${currentRowIdx === i && rowRecording ? 'recording-row' : ''}`} 
-                        title="Speak this task"
-                        onClick={() => startRowRecording(i)}
-                      >
-                        🎤
-                      </button>
-                      <button
-                        className="mic-row-btn"
-                        title="Improvise this task"
-                        onClick={() => handleImprovise(t.description, i)}
-                        disabled={processingIdx === i}
-                      >
-                        {processingIdx === i ? '⏳' : processingIdx === `done-${i}` ? '✓' : processingIdx === `error-${i}` ? '❌' : '✨'}
-                      </button>
-                    </>
-                  )}
                 </div>
-              ))}
-            </div>
+              </div>
+            ))}
           </div>
 
         </div>{/* /main-table */}
 
         {/* FOLLOW-UP */}
-        <div className="followup-section">
-          <div className="followup-label" style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
-            <span>Follow-up required</span>
-            {activeRow === 'followup' && (
-              <div style={{ display: 'flex' }} className="print:hidden">
-                <button 
-                  className={`mic-row-btn ${currentRowIdx === 'followup' && rowRecording ? 'recording-row' : ''}`} 
-                  title="Speak follow-up"
-                  onClick={() => startRowRecording('followup')}
-                >
-                  🎤
-                </button>
-                <button
-                  className="mic-row-btn"
-                  title="Improvise follow-up"
-                  onClick={() => handleImprovise(form.followUpRequired, 'followup')}
-                  disabled={processingIdx === 'followup'}
-                >
-                  {processingIdx === 'followup' ? '⏳' : processingIdx === 'done-followup' ? '✓' : processingIdx === 'error-followup' ? '❌' : '✨'}
-                </button>
+        {(() => {
+          const hasDescription = form.tasks.some(t => t.description.trim());
+          return (
+            <div className={`followup-section ${!hasDescription ? 'followup-locked' : ''}`}>
+              <div className="followup-label">
+                <span>Follow-up required</span>
+                {hasDescription && (
+                  <div className="followup-actions print-hidden">
+                    <button
+                      className={`followup-btn ${followupRecording ? 'recording' : ''}`}
+                      title={followupRecording ? 'Stop recording' : 'Speak follow-up'}
+                      onClick={startFollowupRecording}
+                    >
+                      {followupRecording ? '⏹ Stop' : '🎤'}
+                    </button>
+                    <button
+                      className={`followup-btn enhance ${followupEnhancing ? 'loading' : ''}`}
+                      title="Enhance follow-up with AI"
+                      onClick={enhanceFollowup}
+                      disabled={followupEnhancing || !form.followUpRequired.trim()}
+                    >
+                      {followupEnhancing ? '⏳' : '✨ Enhance'}
+                    </button>
+                  </div>
+                )}
               </div>
-            )}
-          </div>
-          <div className="followup-box">
-            <textarea 
-              className="followup-textarea" 
-              id="f_followup" 
-              placeholder="Describe any follow-up actions required…"
-              value={form.followUpRequired}
-              onChange={e => handleFieldChange('followUpRequired', e.target.value)}
-              onFocus={() => setActiveRow('followup')}
-            ></textarea>
-          </div>
-        </div>
+              <div className="followup-box">
+                {!hasDescription ? (
+                  <div className="followup-locked-msg">
+                    ✏️ Fill the task description rows above first, then add follow-up here.
+                  </div>
+                ) : (
+                  <textarea
+                    className="followup-textarea"
+                    id="f_followup"
+                    placeholder={followupRecording ? '🎤 Listening…' : 'Speak 🎤 or type follow-up actions, recommendations, and status…'}
+                    value={form.followUpRequired}
+                    onChange={e => handleFieldChange('followUpRequired', e.target.value)}
+                  ></textarea>
+                )}
+              </div>
+            </div>
+          );
+        })()}
+
 
         <div className="spacer"></div>
 
@@ -620,10 +937,10 @@ function App() {
               {sigData[0] && <img src={sigData[0]} style={{display:'block', width:'100%', height:'100%'}} alt="Signature" />}
               <div className="sig-placeholder">✍ Click to sign</div>
             </div>
-            <input 
-              className="sig-name-input" 
-              placeholder="Type name here…" 
-              value={sigNames[0]} 
+            <input
+              className="sig-name-input"
+              placeholder="Type name here…"
+              value={sigNames[0]}
               onChange={e => {
                 const ns = [...sigNames];
                 ns[0] = e.target.value;
@@ -643,10 +960,10 @@ function App() {
               {sigData[1] && <img src={sigData[1]} style={{display:'block', width:'100%', height:'100%'}} alt="Signature" />}
               <div className="sig-placeholder">✍ Click to sign</div>
             </div>
-            <input 
-              className="sig-name-input" 
-              placeholder="Type name here…" 
-              value={sigNames[1]} 
+            <input
+              className="sig-name-input"
+              placeholder="Type name here…"
+              value={sigNames[1]}
               onChange={e => {
                 const ns = [...sigNames];
                 ns[1] = e.target.value;
@@ -672,7 +989,7 @@ function App() {
           </div>
           <div className="sig-modal-sub">Sign inside the box using your mouse or finger</div>
           <div className={`sig-modal-canvas-wrap ${sigHasContent ? 'drawing' : ''}`} id="sigModalWrap">
-            <canvas 
+            <canvas
               ref={sigModalCanvasRef}
               onMouseDown={handleMouseDown}
               onMouseMove={handleMouseMove}
@@ -686,22 +1003,6 @@ function App() {
             <button className="sig-btn" onClick={closeSigModal}>Cancel</button>
             <button className="sig-btn primary" onClick={confirmSig}>✓ Confirm</button>
           </div>
-        </div>
-      </div>
-
-      {/* VOICE MODAL */}
-      <div className={`voice-overlay ${rowRecording ? 'active' : ''}`}>
-        <div className="voice-modal">
-          <div className="voice-title">Recording for task</div>
-          <div className="voice-row-label">{currentRowIdx === 'followup' ? 'Follow-up' : `Row #${currentRowIdx !== null ? currentRowIdx + 1 : ''}`}</div>
-          <div className="voice-wave">
-            <div className="wave-bar"></div><div className="wave-bar"></div><div className="wave-bar"></div>
-            <div className="wave-bar"></div><div className="wave-bar"></div><div className="wave-bar"></div>
-            <div className="wave-bar"></div><div className="wave-bar"></div>
-          </div>
-          <div className="voice-timer-modal">{formatTime(rowTimer)}</div>
-          <button className="btn-stop-modal" onClick={stopRowRecording}>■ Stop</button>
-          <div className="voice-transcript">{rowTranscript}</div>
         </div>
       </div>
     </>

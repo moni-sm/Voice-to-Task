@@ -172,51 +172,60 @@ async def process_data(audio: UploadFile = File(None), text: str = Form(None)):
         last_error = None
         
         prompt = """
-        Extract the following fields from the provided service report notes into a JSON object:
+        You are a professional service report writer for a CCTV/networking company called ZeeSense.
+
+        Your job is to extract and ELABORATE every single point from the technician's raw notes into a structured JSON service report.
+
+        STRICT RULES — YOU MUST FOLLOW ALL OF THESE:
+        1. NEVER merge multiple events into one sentence. Each distinct action, finding, observation, or recommendation must be its OWN separate task entry.
+        2. NEVER skip or summarize away any detail. If the technician mentions restarting a switch, a media converter, a wireless device, and a PoE injector — these are FOUR separate details that must all appear (either in one elaborated sentence or split into separate tasks).
+        3. ELABORATE every task into a full, professional sentence. Never use vague or short descriptions. Expand abbreviations, fix grammar, and use formal technical language.
+        4. Use EXACTLY these label prefixes at the start of each task description:
+           - "Issue Observed:" — for problems noticed on arrival
+           - "Troubleshooting Performed:" — for actions taken by the engineer
+           - "Observation:" — for findings/status discovered during work
+           - "Recommendation:" — for suggestions for future action
+        5. Minimum 6 tasks for any service visit. Most visits should produce 7–10 tasks.
+        6. The followUpRequired field must ALWAYS contain a detailed multi-line recommendation and current temporary status.
+
+        Output a valid JSON object with EXACTLY this structure:
         {
-          "site": "string (location or site name)",
-          "date": "string (YYYY-MM-DD or provided date)",
-          "customerRep": "string (customer representative name)",
-          "zeeSenseRep": "string (ZeeSense engineer name)",
-          "tasks": [{"slNo": number, "description": "string (detailed task description)"}],
-          "followUpRequired": "string (detailed follow-up recommendations and status)"
+          "site": "string (location/site name, or empty string if not mentioned)",
+          "date": "string (date in DD/MM/YYYY, or today's date if not mentioned)",
+          "customerRep": "string (customer name, or empty string)",
+          "zeeSenseRep": "string (engineer name, or empty string)",
+          "tasks": [
+            {"slNo": 1, "description": "Issue Observed: ...full elaborated sentence..."},
+            {"slNo": 2, "description": "Troubleshooting Performed: ...full elaborated sentence..."},
+            ...more tasks...
+          ],
+          "followUpRequired": "Recommendation:\\n- point 1\\n- point 2\\n\\nTemporary Status:\\n..."
         }
-        
-        Guidelines for formatting:
-        1. For the 'tasks' list:
-           - Structurally break down the troubleshooting, observations, and actions performed chronologically.
-           - Prepend labels and structure them exactly like:
-             * 'Issue Observed: [Detail]'
-             * 'Troubleshooting Performed: [Detail]'
-             * 'Observation: [Detail]'
-           - Ensure clean, professional grammar and clear detail.
-           
-        2. For the 'followUpRequired' field:
-           - Structure it with clear headings: 'Recommendation:' and 'Temporary Status:'.
-           - List recommended actions clearly.
-           - Specify the current temporary status under 'Temporary Status:'.
-           
-        Example input:
-        'When I was coming to site most of the lift camera was not working now I went to LMR room and restarted the devicees like switch and Media converter and Wirless device POE injector Now cameras are working but Switches and media converter are 10/100 we have to do the trouble shoot if we change to giga switch and Guga Media converter and even if I did restart now it's working after few days or few hours it's go offline again and they have to go to LMR room and restart it again And my recommendation is that Going with Lift flat cable or we can just check by using Giga Switch'
-        
-        Example output JSON:
+
+        EXAMPLE — given this input:
+        "When I was coming to site most of the lift camera was not working now I went to LMR room and restarted the devices like switch and Media converter and Wireless device POE injector Now cameras are working but Switches and media converter are 10/100 we have to do the trouble shoot if we change to giga switch and Giga Media converter and even if I did restart now it's working after few days or few hours it's go offline again and they have to go to LMR room and restart it again And my recommendation is that Going with Lift flat cable or we can just check by using Giga Switch"
+
+        EXAMPLE output:
         {
           "site": "",
           "date": "",
           "customerRep": "",
           "zeeSenseRep": "",
           "tasks": [
-            {"slNo": 1, "description": "Issue Observed: During the site visit, it was observed that most of the lift cameras were offline/not working."},
-            {"slNo": 2, "description": "Troubleshooting Performed: Visited the LMR (Lift Machine Room)."},
-            {"slNo": 3, "description": "Troubleshooting Performed: Restarted the following devices: Network Switch, Media Converter, Wireless Device, and POE Injector."},
-            {"slNo": 4, "description": "Troubleshooting Performed: After restarting the devices, all lift cameras came online and started working properly."},
-            {"slNo": 5, "description": "Observation: Currently installed switches and media converters are operating on 10/100 Mbps devices."},
-            {"slNo": 6, "description": "Observation: However, the issue may reoccur after a few hours or days, as the devices are becoming offline repeatedly and require manual restarting from the LMR room."}
+            {"slNo": 1, "description": "Issue Observed: Upon arrival at the site, it was found that most of the lift cameras were offline and not displaying any video feed."},
+            {"slNo": 2, "description": "Troubleshooting Performed: Proceeded to the Lift Machine Room (LMR) to inspect the network equipment responsible for the lift camera connectivity."},
+            {"slNo": 3, "description": "Troubleshooting Performed: Performed a manual restart of the Network Switch located in the LMR room."},
+            {"slNo": 4, "description": "Troubleshooting Performed: Performed a manual restart of the Media Converter in the LMR room to restore fiber-to-copper signal conversion."},
+            {"slNo": 5, "description": "Troubleshooting Performed: Performed a manual restart of the Wireless Device (Access Point/Bridge) connected to the LMR network infrastructure."},
+            {"slNo": 6, "description": "Troubleshooting Performed: Performed a manual restart of the PoE (Power over Ethernet) Injector supplying power to the network devices."},
+            {"slNo": 7, "description": "Observation: Following the restart of all network devices, all lift cameras successfully came back online and are now functioning normally."},
+            {"slNo": 8, "description": "Observation: The currently installed Network Switch and Media Converter are operating on legacy 10/100 Mbps technology, which is insufficient for stable, high-bandwidth CCTV transmission."},
+            {"slNo": 9, "description": "Observation: The issue is intermittent and recurring — devices go offline after a few hours or days and require a technician to physically visit the LMR room to manually restart the equipment each time."}
           ],
-          "followUpRequired": "Recommendation:\\nFurther troubleshooting is required to identify the root cause. Recommended actions are:\\n- Replace existing 10/100 switches and media converters with Gigabit Switches and Gigabit Media Converters for stable communication.\\n- If the issue still persists, recommend proceeding with Lift Flat Cable installation for reliable connectivity.\\n\\nTemporary Status:\\nSystem restored temporarily after device restart. Continuous monitoring recommended."
+          "followUpRequired": "Recommendation:\\n- Replace the existing 10/100 Mbps Network Switch with a Gigabit Switch to improve data throughput and reduce connection drops.\\n- Replace the existing 10/100 Mbps Media Converter with a Gigabit Media Converter for stable fiber signal conversion.\\n- If the issue persists after upgrading the switch and media converter, proceed with installing a dedicated Lift Flat Cable (structured cabling) to provide a more reliable and permanent connectivity solution.\\n- Conduct a detailed network audit of the LMR room infrastructure to identify any other aging or underperforming components.\\n\\nTemporary Status:\\nAll lift cameras are currently operational following the manual device restart. However, the fix is temporary. The root cause (aging 10/100 hardware and unstable network path) has not been permanently resolved. Continuous monitoring is recommended until a permanent hardware upgrade is completed."
         }
-        
-        Ensure you follow this structure and style for any service report notes input.
+
+        Now apply these same rules to the following technician notes and output ONLY valid JSON:
         """
         
         content_parts = [prompt]
