@@ -49,6 +49,7 @@ class ZeeSensePDF(FPDF):
         self.ln(15)
 
 def generate_zeeseense_pdf(data):
+    os.makedirs("static", exist_ok=True)
     pdf = ZeeSensePDF(orientation='P', unit='mm', format='A4')
     pdf.add_page()
     pdf.set_font("Arial", size=10)
@@ -89,7 +90,6 @@ def generate_zeeseense_pdf(data):
     
     # Tasks Content
     pdf.set_font("Arial", '', 10)
-    start_y = pdf.get_y()
     
     tasks = data.get('tasks', [])
     if not tasks:
@@ -119,6 +119,35 @@ def generate_zeeseense_pdf(data):
     pdf.set_font("Arial", 'B', 10)
     pdf.cell(95, 5, "ZeeSense Engr.", 0, 0, 'C')
     pdf.cell(95, 5, "Customer Rep.", 0, 1, 'C')
+    
+    # Render signatures from base64
+    import base64
+    import tempfile
+    
+    sigs = data.get('signatures', [None, None])
+    temp_files = []
+    y_sig = 236
+    w_sig = 50
+    h_sig = 18
+    
+    for i, sig_base64 in enumerate(sigs):
+        if sig_base64 and sig_base64.startswith("data:image"):
+            try:
+                # Extract the base64 part
+                header, encoded = sig_base64.split(",", 1)
+                data_bytes = base64.b64decode(encoded)
+                # Create a temp file
+                tmp = tempfile.NamedTemporaryFile(delete=False, suffix=".png")
+                tmp.write(data_bytes)
+                tmp.close()
+                temp_files.append(tmp.name)
+                # Draw on PDF
+                x_pos = 10 + i * 95 + (95 - w_sig) / 2
+                pdf.image(tmp.name, x=x_pos, y=y_sig, w=w_sig, h=h_sig)
+            except Exception as e:
+                print(f"Error embedding signature {i}: {e}")
+                
+    pdf.set_y(256)
     pdf.set_font("Arial", '', 10)
     pdf.cell(95, 5, "(Name & Signature)", 0, 0, 'C')
     pdf.cell(95, 5, "(Name & Signature)", 0, 1, 'C')
@@ -126,6 +155,14 @@ def generate_zeeseense_pdf(data):
     filename = f"ZeeSense_Report_{int(time.time())}.pdf"
     path = os.path.join("static", filename)
     pdf.output(path)
+    
+    # Clean up temp files
+    for tmp_name in temp_files:
+        try:
+            os.unlink(tmp_name)
+        except:
+            pass
+            
     return filename
 
 @app.post("/api/process")
@@ -141,10 +178,45 @@ async def process_data(audio: UploadFile = File(None), text: str = Form(None)):
           "date": "string (YYYY-MM-DD or provided date)",
           "customerRep": "string (customer representative name)",
           "zeeSenseRep": "string (ZeeSense engineer name)",
-          "tasks": [{"slNo": number, "description": "string (clear, professional task description)"}],
-          "followUpRequired": "string (any pending work or follow-ups)"
+          "tasks": [{"slNo": number, "description": "string (detailed task description)"}],
+          "followUpRequired": "string (detailed follow-up recommendations and status)"
         }
-        Clean up the language to sound professional. If information is missing, leave it as an empty string.
+        
+        Guidelines for formatting:
+        1. For the 'tasks' list:
+           - Structurally break down the troubleshooting, observations, and actions performed chronologically.
+           - Prepend labels and structure them exactly like:
+             * 'Issue Observed: [Detail]'
+             * 'Troubleshooting Performed: [Detail]'
+             * 'Observation: [Detail]'
+           - Ensure clean, professional grammar and clear detail.
+           
+        2. For the 'followUpRequired' field:
+           - Structure it with clear headings: 'Recommendation:' and 'Temporary Status:'.
+           - List recommended actions clearly.
+           - Specify the current temporary status under 'Temporary Status:'.
+           
+        Example input:
+        'When I was coming to site most of the lift camera was not working now I went to LMR room and restarted the devicees like switch and Media converter and Wirless device POE injector Now cameras are working but Switches and media converter are 10/100 we have to do the trouble shoot if we change to giga switch and Guga Media converter and even if I did restart now it's working after few days or few hours it's go offline again and they have to go to LMR room and restart it again And my recommendation is that Going with Lift flat cable or we can just check by using Giga Switch'
+        
+        Example output JSON:
+        {
+          "site": "",
+          "date": "",
+          "customerRep": "",
+          "zeeSenseRep": "",
+          "tasks": [
+            {"slNo": 1, "description": "Issue Observed: During the site visit, it was observed that most of the lift cameras were offline/not working."},
+            {"slNo": 2, "description": "Troubleshooting Performed: Visited the LMR (Lift Machine Room)."},
+            {"slNo": 3, "description": "Troubleshooting Performed: Restarted the following devices: Network Switch, Media Converter, Wireless Device, and POE Injector."},
+            {"slNo": 4, "description": "Troubleshooting Performed: After restarting the devices, all lift cameras came online and started working properly."},
+            {"slNo": 5, "description": "Observation: Currently installed switches and media converters are operating on 10/100 Mbps devices."},
+            {"slNo": 6, "description": "Observation: However, the issue may reoccur after a few hours or days, as the devices are becoming offline repeatedly and require manual restarting from the LMR room."}
+          ],
+          "followUpRequired": "Recommendation:\\nFurther troubleshooting is required to identify the root cause. Recommended actions are:\\n- Replace existing 10/100 switches and media converters with Gigabit Switches and Gigabit Media Converters for stable communication.\\n- If the issue still persists, recommend proceeding with Lift Flat Cable installation for reliable connectivity.\\n\\nTemporary Status:\\nSystem restored temporarily after device restart. Continuous monitoring recommended."
+        }
+        
+        Ensure you follow this structure and style for any service report notes input.
         """
         
         content_parts = [prompt]
@@ -183,7 +255,7 @@ async def process_data(audio: UploadFile = File(None), text: str = Form(None)):
 async def generate_pdf_endpoint(data: dict):
     try:
         pdf_filename = generate_zeeseense_pdf(data)
-        return {"pdf_url": f"http://localhost:8000/static/{pdf_filename}"}
+        return {"pdf_url": f"/static/{pdf_filename}"}
     except Exception as e:
         raise HTTPException(status_code=500, detail=str(e))
 

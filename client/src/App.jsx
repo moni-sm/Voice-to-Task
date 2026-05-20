@@ -40,6 +40,12 @@ function App() {
   const sigModalCtxRef = useRef(null);
   const isDrawingRef = useRef(false);
 
+  // Scaling refs & state for responsive layout preservation on mobile
+  const [scale, setScale] = useState(1);
+  const [pageHeight, setPageHeight] = useState(1123);
+  const containerRef = useRef(null);
+  const a4PageRef = useRef(null);
+
   useEffect(() => {
     return () => {
       clearInterval(globalTimerRef.current);
@@ -47,6 +53,27 @@ function App() {
       if (globalRecognitionRef.current) globalRecognitionRef.current.stop();
       if (rowRecognitionRef.current) rowRecognitionRef.current.stop();
     };
+  }, []);
+
+  useEffect(() => {
+    const handleResize = () => {
+      if (!containerRef.current || !a4PageRef.current) return;
+      const containerWidth = containerRef.current.offsetWidth;
+      const pageWidth = 794; // approx 210mm in pixels
+      let currentScale = 1;
+      if (containerWidth < pageWidth) {
+        currentScale = containerWidth / pageWidth;
+      }
+      setScale(currentScale);
+      setPageHeight(a4PageRef.current.offsetHeight);
+    };
+
+    const observer = new ResizeObserver(() => handleResize());
+    if (containerRef.current) observer.observe(containerRef.current);
+    if (a4PageRef.current) observer.observe(a4PageRef.current);
+
+    handleResize();
+    return () => observer.disconnect();
   }, []);
 
   const handleFieldChange = (field, value) => {
@@ -241,6 +268,38 @@ function App() {
     window.print();
   };
 
+  const getPos = (e, canvas) => {
+    const r = canvas.getBoundingClientRect();
+    const scaleX = canvas.width / r.width;
+    const scaleY = canvas.height / r.height;
+    return { x: (e.clientX - r.left) * scaleX, y: (e.clientY - r.top) * scaleY };
+  };
+
+  const getTouchPos = (e, canvas) => {
+    const r = canvas.getBoundingClientRect();
+    const scaleX = canvas.width / r.width;
+    const scaleY = canvas.height / r.height;
+    const t = e.touches[0];
+    return { x: (t.clientX - r.left) * scaleX, y: (t.clientY - r.top) * scaleY };
+  };
+
+  const handleMouseDown = (e) => {
+    isDrawingRef.current = true;
+    setSigHasContent(true);
+    const p = getPos(e, sigModalCanvasRef.current);
+    sigModalCtxRef.current.beginPath();
+    sigModalCtxRef.current.moveTo(p.x, p.y);
+  };
+
+  const handleMouseMove = (e) => {
+    if (!isDrawingRef.current) return;
+    const p = getPos(e, sigModalCanvasRef.current);
+    sigModalCtxRef.current.lineTo(p.x, p.y);
+    sigModalCtxRef.current.stroke();
+  };
+
+  const handleMouseUp = () => { isDrawingRef.current = false; };
+
   // ── SIGNATURES ──
   useEffect(() => {
     if (sigModalOpen && sigModalCanvasRef.current) {
@@ -286,61 +345,41 @@ function App() {
         img.src = dataURL;
       };
 
+      // Define touch event listeners manually with { passive: false } to prevent browser scroll warnings and page dragging
+      const handleTouchStartEvent = (e) => {
+        e.preventDefault();
+        isDrawingRef.current = true;
+        setSigHasContent(true);
+        const p = getTouchPos(e, canvas);
+        ctx.beginPath();
+        ctx.moveTo(p.x, p.y);
+      };
+
+      const handleTouchMoveEvent = (e) => {
+        e.preventDefault();
+        if (!isDrawingRef.current) return;
+        const p = getTouchPos(e, canvas);
+        ctx.lineTo(p.x, p.y);
+        ctx.stroke();
+      };
+
+      const handleTouchEndEvent = () => {
+        isDrawingRef.current = false;
+      };
+
+      canvas.addEventListener('touchstart', handleTouchStartEvent, { passive: false });
+      canvas.addEventListener('touchmove', handleTouchMoveEvent, { passive: false });
+      canvas.addEventListener('touchend', handleTouchEndEvent);
+
       window.addEventListener('resize', handleResize);
       return () => {
         window.removeEventListener('resize', handleResize);
+        canvas.removeEventListener('touchstart', handleTouchStartEvent);
+        canvas.removeEventListener('touchmove', handleTouchMoveEvent);
+        canvas.removeEventListener('touchend', handleTouchEndEvent);
       };
     }
   }, [sigModalOpen, currentSigIdx, sigData]);
-
-  const getPos = (e, canvas) => {
-    const r = canvas.getBoundingClientRect();
-    const scaleX = canvas.width / r.width;
-    const scaleY = canvas.height / r.height;
-    return { x: (e.clientX - r.left) * scaleX, y: (e.clientY - r.top) * scaleY };
-  };
-
-  const getTouchPos = (e, canvas) => {
-    const r = canvas.getBoundingClientRect();
-    const scaleX = canvas.width / r.width;
-    const scaleY = canvas.height / r.height;
-    const t = e.touches[0];
-    return { x: (t.clientX - r.left) * scaleX, y: (t.clientY - r.top) * scaleY };
-  };
-
-  const handleMouseDown = (e) => {
-    isDrawingRef.current = true;
-    setSigHasContent(true);
-    const p = getPos(e, sigModalCanvasRef.current);
-    sigModalCtxRef.current.beginPath();
-    sigModalCtxRef.current.moveTo(p.x, p.y);
-  };
-
-  const handleMouseMove = (e) => {
-    if (!isDrawingRef.current) return;
-    const p = getPos(e, sigModalCanvasRef.current);
-    sigModalCtxRef.current.lineTo(p.x, p.y);
-    sigModalCtxRef.current.stroke();
-  };
-
-  const handleMouseUp = () => { isDrawingRef.current = false; };
-
-  const handleTouchStart = (e) => {
-    e.preventDefault();
-    isDrawingRef.current = true;
-    setSigHasContent(true);
-    const p = getTouchPos(e, sigModalCanvasRef.current);
-    sigModalCtxRef.current.beginPath();
-    sigModalCtxRef.current.moveTo(p.x, p.y);
-  };
-
-  const handleTouchMove = (e) => {
-    e.preventDefault();
-    if (!isDrawingRef.current) return;
-    const p = getTouchPos(e, sigModalCanvasRef.current);
-    sigModalCtxRef.current.lineTo(p.x, p.y);
-    sigModalCtxRef.current.stroke();
-  };
 
   const openSigModal = (idx) => {
     setCurrentSigIdx(idx);
@@ -409,8 +448,36 @@ function App() {
         </button>
       </div>
 
-      {/* A4 PAGE */}
-      <div className="a4-page" id="a4Page">
+      {/* A4 PAGE CONTAINER */}
+      <div 
+        ref={containerRef}
+        className="a4-container"
+        style={{
+          width: '100%',
+          display: 'flex',
+          justifyContent: 'center',
+          alignItems: 'flex-start',
+          overflow: 'hidden',
+          height: scale < 1 ? `${pageHeight * scale}px` : 'auto',
+          padding: scale < 1 ? '0' : '0 10px',
+        }}
+      >
+        <div 
+          ref={a4PageRef}
+          className="a4-page" 
+          id="a4Page"
+          style={scale < 1 ? {
+            transform: `scale(${scale})`,
+            transformOrigin: 'top center',
+            flexShrink: 0,
+            margin: '0',
+            width: '210mm',
+            minWidth: '210mm',
+            maxWidth: 'none',
+          } : {
+            margin: '0 auto 20px',
+          }}
+        >
 
         {/* HEADER */}
         <div className="header">
@@ -595,6 +662,7 @@ function App() {
         </div>
 
       </div>{/* /a4-page */}
+      </div>{/* /a4-container */}
 
       {/* SIGNATURE MODAL */}
       <div className={`sig-overlay ${sigModalOpen ? 'active' : ''}`} onClick={(e) => { if (e.target.classList.contains('sig-overlay')) closeSigModal(); }}>
@@ -610,9 +678,6 @@ function App() {
               onMouseMove={handleMouseMove}
               onMouseUp={handleMouseUp}
               onMouseLeave={handleMouseUp}
-              onTouchStart={handleTouchStart}
-              onTouchMove={handleTouchMove}
-              onTouchEnd={handleMouseUp}
             ></canvas>
             <div className="sig-modal-hint">✍ Draw your signature here</div>
           </div>
