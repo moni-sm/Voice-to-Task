@@ -245,26 +245,51 @@ function App() {
   useEffect(() => {
     if (sigModalOpen && sigModalCanvasRef.current) {
       const canvas = sigModalCanvasRef.current;
-      // Use parent width, or default to 432.
-      canvas.width = canvas.parentElement.offsetWidth || 432;
-      canvas.height = 180;
       const ctx = canvas.getContext('2d');
-      ctx.strokeStyle = '#1a1a2e';
-      ctx.lineWidth = 2.2;
-      ctx.lineCap = 'round';
-      ctx.lineJoin = 'round';
       sigModalCtxRef.current = ctx;
 
-      setSigHasContent(false);
+      const initCanvas = () => {
+        canvas.width = canvas.parentElement.offsetWidth || 432;
+        canvas.height = 180;
+        ctx.strokeStyle = '#1a1a2e';
+        ctx.lineWidth = 2.2;
+        ctx.lineCap = 'round';
+        ctx.lineJoin = 'round';
 
-      if (sigData[currentSigIdx]) {
+        if (sigData[currentSigIdx]) {
+          const img = new Image();
+          img.onload = () => {
+            ctx.drawImage(img, 0, 0, canvas.width, canvas.height);
+          };
+          img.src = sigData[currentSigIdx];
+        }
+      };
+
+      initCanvas();
+      setSigHasContent(!!sigData[currentSigIdx]);
+
+      // Handle screen resize/rotation on mobile
+      const handleResize = () => {
+        const dataURL = canvas.toDataURL();
+        canvas.width = canvas.parentElement.offsetWidth || 432;
+        canvas.height = 180;
+        
+        ctx.strokeStyle = '#1a1a2e';
+        ctx.lineWidth = 2.2;
+        ctx.lineCap = 'round';
+        ctx.lineJoin = 'round';
+
         const img = new Image();
         img.onload = () => {
           ctx.drawImage(img, 0, 0, canvas.width, canvas.height);
-          setSigHasContent(true);
         };
-        img.src = sigData[currentSigIdx];
-      }
+        img.src = dataURL;
+      };
+
+      window.addEventListener('resize', handleResize);
+      return () => {
+        window.removeEventListener('resize', handleResize);
+      };
     }
   }, [sigModalOpen, currentSigIdx, sigData]);
 
