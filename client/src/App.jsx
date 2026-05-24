@@ -138,13 +138,7 @@ function App() {
   const sigModalCtxRef = useRef(null);
   const isDrawingRef = useRef(false);
 
-  // Settings State
-  const [settingsModalOpen, setSettingsModalOpen] = useState(false);
-  const [customApiKey, setCustomApiKey] = useState(localStorage.getItem('gemini_api_key') || '');
-  const [selectedModel, setSelectedModel] = useState(localStorage.getItem('gemini_model') || 'auto');
-  const [tempApiKey, setTempApiKey] = useState(customApiKey);
-  const [tempModel, setTempModel] = useState(selectedModel);
-  const [showKey, setShowKey] = useState(false);
+
 
   // Scaling
   const [scale, setScale] = useState(1);
@@ -262,13 +256,8 @@ function App() {
       try {
         const formData = new FormData();
         formData.append('text', text);
-        const headers = {};
-        if (customApiKey) headers['X-Gemini-API-Key'] = customApiKey;
-        if (selectedModel) headers['X-Gemini-Model'] = selectedModel;
-
         const response = await fetch(`${API_URL}/api/process`, { 
           method: 'POST', 
-          headers,
           body: formData 
         });
 
@@ -334,13 +323,8 @@ function App() {
     try {
       const formData = new FormData();
       formData.append('text', text);
-      const headers = {};
-      if (customApiKey) headers['X-Gemini-API-Key'] = customApiKey;
-      if (selectedModel) headers['X-Gemini-Model'] = selectedModel;
-
       const response = await fetch(`${API_URL}/api/process`, {
         method: 'POST',
-        headers,
         body: formData,
       });
 
@@ -511,13 +495,8 @@ function App() {
     try {
       const formData = new FormData();
       formData.append('text', 'Follow-up for service report: ' + form.followUpRequired);
-      const headers = {};
-      if (customApiKey) headers['X-Gemini-API-Key'] = customApiKey;
-      if (selectedModel) headers['X-Gemini-Model'] = selectedModel;
-
       const response = await fetch(`${API_URL}/api/process`, { 
         method: 'POST', 
-        headers,
         body: formData 
       });
 
@@ -791,25 +770,7 @@ function App() {
           )}
         </button>
 
-        <button
-          className="btn btn-blue"
-          style={{
-            padding: '10px 24px',
-            fontSize: '14px',
-            borderRadius: '6px',
-            display: 'flex',
-            alignItems: 'center',
-            gap: '8px',
-            boxShadow: '0 4px 12px rgba(59, 130, 246, 0.3)'
-          }}
-          onClick={() => {
-            setTempApiKey(customApiKey);
-            setTempModel(selectedModel);
-            setSettingsModalOpen(true);
-          }}
-        >
-          <span>⚙️</span> Settings
-        </button>
+
       </div>
 
       {/* CHAT PANEL */}
@@ -1152,77 +1113,7 @@ function App() {
         </div>
       </div>
 
-      {/* SETTINGS MODAL */}
-      <div 
-        className={`settings-overlay ${settingsModalOpen ? 'active' : ''}`} 
-        onClick={(e) => { if (e.target.classList.contains('settings-overlay')) setSettingsModalOpen(false); }}
-      >
-        <div className="settings-modal">
-          <div className="settings-modal-title">
-            ⚙️ Gemini API Configuration
-          </div>
-          <div className="settings-modal-sub">
-            Configure your private Google Gemini API credentials.
-          </div>
-          
-          <div className="settings-form-group">
-            <label className="settings-label">Gemini API Key</label>
-            <div className="settings-input-wrap">
-              <input
-                type={showKey ? "text" : "password"}
-                className="settings-input"
-                placeholder="AIzaSy..."
-                value={tempApiKey}
-                onChange={e => setTempApiKey(e.target.value)}
-              />
-              <button 
-                type="button" 
-                className="settings-show-btn"
-                onClick={() => setShowKey(!showKey)}
-              >
-                {showKey ? "Hide" : "Show"}
-              </button>
-            </div>
-            <div className="settings-help">
-              Don't have an API key? Get a free key from {" "}
-              <a href="https://aistudio.google.com/" target="_blank" rel="noopener noreferrer" className="settings-link">
-                Google AI Studio ↗
-              </a>
-            </div>
-          </div>
 
-          <div className="settings-form-group">
-            <label className="settings-label">Model Selection</label>
-            <select
-              className="settings-select"
-              value={tempModel}
-              onChange={e => setTempModel(e.target.value)}
-            >
-              <option value="auto">Auto-detect Model (Recommended)</option>
-              <option value="gemini-2.5-flash">Gemini 2.5 Flash (Fast, Multimodal)</option>
-              <option value="gemini-2.5-pro">Gemini 2.5 Pro (High Intelligence)</option>
-              <option value="gemini-1.5-flash">Gemini 1.5 Flash (Legacy Fast)</option>
-              <option value="gemini-1.5-pro">Gemini 1.5 Pro (Legacy Pro)</option>
-            </select>
-          </div>
-
-          <div className="settings-modal-actions">
-            <button className="sig-btn" onClick={() => setSettingsModalOpen(false)}>Cancel</button>
-            <button 
-              className="sig-btn primary" 
-              onClick={() => {
-                localStorage.setItem('gemini_api_key', tempApiKey.trim());
-                localStorage.setItem('gemini_model', tempModel);
-                setCustomApiKey(tempApiKey.trim());
-                setSelectedModel(tempModel);
-                setSettingsModalOpen(false);
-              }}
-            >
-              ✓ Save Settings
-            </button>
-          </div>
-        </div>
-      </div>
     </>
   );
 }
