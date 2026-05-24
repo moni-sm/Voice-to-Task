@@ -1,12 +1,62 @@
 import React, { useState, useEffect, useRef, useCallback } from 'react';
 
 const NUM_TASKS = 14;
-const API_URL = 'https://voice-to-task.onrender.com';
+const API_URL = window.location.hostname === 'localhost' || window.location.hostname === '127.0.0.1'
+  ? 'http://localhost:8000'
+  : 'https://voice-to-task.onrender.com';
 
 
-// Auto-growing textarea that resizes to fit its content
+// Helper to highlight keywords in task descriptions
+const highlightKeywords = (text) => {
+  if (!text) return '';
+
+  const keywords = [
+    // Problems (Red/Amber)
+    { pattern: /\b(?:Issue Observed|Issue|observed|Faulty|Failed|Not functioning|offline|intermittent)\b/gi, class: 'hl-problem' },
+    // Actions/Troubleshooting (Blue)
+    { pattern: /\b(?:Troubleshooting Performed|Troubleshooting|Troubleshoot|Checked|Inspected|Identified|Shifted|Tested|Testing|restarted|recycle|restart)\b/gi, class: 'hl-action' },
+    // Solutions/Success (Green)
+    { pattern: /\b(?:Solved|Resolved|Fixed|Functioning properly|Working properly|successfully|confirmed|operational)\b/gi, class: 'hl-success' },
+    // Key prefixes/Structures (Gray)
+    { pattern: /\b(?:work Done|Work Done|Status)\b/gi, class: 'hl-structure' }
+  ];
+
+  const combinedPattern = new RegExp(
+    '(' + keywords.map(kw => kw.pattern.source).join('|') + ')',
+    'gi'
+  );
+
+  const parts = text.split(combinedPattern);
+  return parts.map((part, index) => {
+    if (!part) return null;
+    
+    const match = keywords.find(kw => part.match(kw.pattern));
+    if (match) {
+      return (
+        <span key={index} className={match.class}>
+          {part}
+        </span>
+      );
+    }
+    return part;
+  });
+};
+
+// Auto-growing textarea that resizes to fit its content, with syntax highlighting when blurred
 function TaskTextarea({ value, placeholder, onChange }) {
+  const [focused, setFocused] = useState(false);
   const ref = useRef(null);
+
+  useEffect(() => {
+    if (focused && ref.current) {
+      ref.current.focus();
+      const val = ref.current.value;
+      ref.current.value = '';
+      ref.current.value = val;
+      ref.current.style.height = 'auto';
+      ref.current.style.height = ref.current.scrollHeight + 'px';
+    }
+  }, [focused]);
 
   useEffect(() => {
     if (ref.current) {
@@ -14,6 +64,18 @@ function TaskTextarea({ value, placeholder, onChange }) {
       ref.current.style.height = ref.current.scrollHeight + 'px';
     }
   }, [value]);
+
+  if (!focused && value) {
+    return (
+      <div
+        className="task-input highlighted-view"
+        onClick={() => setFocused(true)}
+        style={{ cursor: 'text', minHeight: '32px' }}
+      >
+        {highlightKeywords(value)}
+      </div>
+    );
+  }
 
   return (
     <textarea
@@ -23,6 +85,7 @@ function TaskTextarea({ value, placeholder, onChange }) {
       value={value}
       rows={1}
       onChange={e => onChange(e.target.value)}
+      onBlur={() => setFocused(false)}
     />
   );
 }
@@ -74,6 +137,14 @@ function App() {
   const sigModalCanvasRef = useRef(null);
   const sigModalCtxRef = useRef(null);
   const isDrawingRef = useRef(false);
+
+  // Settings State
+  const [settingsModalOpen, setSettingsModalOpen] = useState(false);
+  const [customApiKey, setCustomApiKey] = useState(localStorage.getItem('gemini_api_key') || '');
+  const [selectedModel, setSelectedModel] = useState(localStorage.getItem('gemini_model') || 'auto');
+  const [tempApiKey, setTempApiKey] = useState(customApiKey);
+  const [tempModel, setTempModel] = useState(selectedModel);
+  const [showKey, setShowKey] = useState(false);
 
   // Scaling
   const [scale, setScale] = useState(1);
@@ -191,8 +262,20 @@ function App() {
       try {
         const formData = new FormData();
         formData.append('text', text);
-        const response = await fetch(`${API_URL}/api/process`, { method: 'POST', body: formData });
-        if (!response.ok) throw new Error('Server error');
+        const headers = {};
+        if (customApiKey) headers['X-Gemini-API-Key'] = customApiKey;
+        if (selectedModel) headers['X-Gemini-Model'] = selectedModel;
+
+        const response = await fetch(`${API_URL}/api/process`, { 
+          method: 'POST', 
+          headers,
+          body: formData 
+        });
+
+        if (!response.ok) {
+          const errData = await response.json().catch(() => ({}));
+          throw new Error(errData.detail || 'Server error');
+        }
         const metaData = await response.json();
 
         // Merge metadata into the pending report data
@@ -225,9 +308,13 @@ function App() {
         setChatMode('report');
         setPendingReportData(null);
       } catch (e) {
+        let errMsg = e.message || 'Could not process details. Please try again.';
+        if (errMsg.includes('API Key is missing')) {
+          errMsg = '⚠️ Gemini API Key is missing. Click the Settings icon ⚙️ in the toolbar to enter your key.';
+        }
         setChatMessages(prev => prev.map(m =>
           m.id === thinkingId
-            ? { ...m, text: '❌ Could not process details. Please try again.', data: null }
+            ? { ...m, text: `❌ ${errMsg}`, data: null }
             : m
         ));
       } finally {
@@ -247,13 +334,20 @@ function App() {
     try {
       const formData = new FormData();
       formData.append('text', text);
+      const headers = {};
+      if (customApiKey) headers['X-Gemini-API-Key'] = customApiKey;
+      if (selectedModel) headers['X-Gemini-Model'] = selectedModel;
 
       const response = await fetch(`${API_URL}/api/process`, {
         method: 'POST',
+        headers,
         body: formData,
       });
 
-      if (!response.ok) throw new Error('Server error');
+      if (!response.ok) {
+        const errData = await response.json().catch(() => ({}));
+        throw new Error(errData.detail || 'Server error');
+      }
       const data = await response.json();
 
       const aiFormatted = formatAiResponse(data);
@@ -289,9 +383,13 @@ function App() {
       }
 
     } catch (e) {
+      let errMsg = e.message || 'Failed to process. Please try again.';
+      if (errMsg.includes('API Key is missing')) {
+        errMsg = '⚠️ Gemini API Key is missing. Click the Settings icon ⚙️ in the toolbar to enter your key.';
+      }
       setChatMessages(prev => prev.map(m =>
         m.id === thinkingMsg.id
-          ? { ...m, text: '\u274c Failed to process. Please try again.', data: null }
+          ? { ...m, text: `❌ ${errMsg}`, data: null }
           : m
       ));
     } finally {
@@ -413,8 +511,20 @@ function App() {
     try {
       const formData = new FormData();
       formData.append('text', 'Follow-up for service report: ' + form.followUpRequired);
-      const response = await fetch(`${API_URL}/api/process`, { method: 'POST', body: formData });
-      if (!response.ok) throw new Error('Server error');
+      const headers = {};
+      if (customApiKey) headers['X-Gemini-API-Key'] = customApiKey;
+      if (selectedModel) headers['X-Gemini-Model'] = selectedModel;
+
+      const response = await fetch(`${API_URL}/api/process`, { 
+        method: 'POST', 
+        headers,
+        body: formData 
+      });
+
+      if (!response.ok) {
+        const errData = await response.json().catch(() => ({}));
+        throw new Error(errData.detail || 'Server error');
+      }
       const data = await response.json();
       if (data.followUpRequired) {
         handleFieldChange('followUpRequired', data.followUpRequired);
@@ -423,6 +533,7 @@ function App() {
       }
     } catch (e) {
       console.error(e);
+      alert('Error enhancing follow-up: ' + e.message);
     } finally {
       setFollowupEnhancing(false);
     }
@@ -635,13 +746,17 @@ function App() {
             <span className="chat-bullet-dot">•</span>
             <span>
               <strong className="chat-label">{label}:</strong>
-              {rest ? ` ${rest}` : ''}
+              {rest ? ' ' : ''}
+              {highlightKeywords(rest)}
             </span>
           </div>
         );
       }
       return (
-        <div key={i} className="chat-line">{line}</div>
+        <div key={i} className="chat-bullet">
+          <span className="chat-bullet-dot">•</span>
+          <span className="chat-line">{highlightKeywords(line)}</span>
+        </div>
       );
     });
   };
@@ -649,7 +764,7 @@ function App() {
   return (
     <>
       {/* TOOLBAR */}
-      <div className="toolbar" style={{ justifyContent: 'center' }}>
+      <div className="toolbar" style={{ justifyContent: 'center', gap: '16px' }}>
         <button
           className="btn btn-green"
           style={{
@@ -674,6 +789,26 @@ function App() {
               <span>⬇</span> Download PDF
             </>
           )}
+        </button>
+
+        <button
+          className="btn btn-blue"
+          style={{
+            padding: '10px 24px',
+            fontSize: '14px',
+            borderRadius: '6px',
+            display: 'flex',
+            alignItems: 'center',
+            gap: '8px',
+            boxShadow: '0 4px 12px rgba(59, 130, 246, 0.3)'
+          }}
+          onClick={() => {
+            setTempApiKey(customApiKey);
+            setTempModel(selectedModel);
+            setSettingsModalOpen(true);
+          }}
+        >
+          <span>⚙️</span> Settings
         </button>
       </div>
 
@@ -1013,6 +1148,78 @@ function App() {
             <button className="sig-btn" onClick={clearModalCanvas}>✕ Clear</button>
             <button className="sig-btn" onClick={closeSigModal}>Cancel</button>
             <button className="sig-btn primary" onClick={confirmSig}>✓ Confirm</button>
+          </div>
+        </div>
+      </div>
+
+      {/* SETTINGS MODAL */}
+      <div 
+        className={`settings-overlay ${settingsModalOpen ? 'active' : ''}`} 
+        onClick={(e) => { if (e.target.classList.contains('settings-overlay')) setSettingsModalOpen(false); }}
+      >
+        <div className="settings-modal">
+          <div className="settings-modal-title">
+            ⚙️ Gemini API Configuration
+          </div>
+          <div className="settings-modal-sub">
+            Configure your private Google Gemini API credentials.
+          </div>
+          
+          <div className="settings-form-group">
+            <label className="settings-label">Gemini API Key</label>
+            <div className="settings-input-wrap">
+              <input
+                type={showKey ? "text" : "password"}
+                className="settings-input"
+                placeholder="AIzaSy..."
+                value={tempApiKey}
+                onChange={e => setTempApiKey(e.target.value)}
+              />
+              <button 
+                type="button" 
+                className="settings-show-btn"
+                onClick={() => setShowKey(!showKey)}
+              >
+                {showKey ? "Hide" : "Show"}
+              </button>
+            </div>
+            <div className="settings-help">
+              Don't have an API key? Get a free key from {" "}
+              <a href="https://aistudio.google.com/" target="_blank" rel="noopener noreferrer" className="settings-link">
+                Google AI Studio ↗
+              </a>
+            </div>
+          </div>
+
+          <div className="settings-form-group">
+            <label className="settings-label">Model Selection</label>
+            <select
+              className="settings-select"
+              value={tempModel}
+              onChange={e => setTempModel(e.target.value)}
+            >
+              <option value="auto">Auto-detect Model (Recommended)</option>
+              <option value="gemini-2.5-flash">Gemini 2.5 Flash (Fast, Multimodal)</option>
+              <option value="gemini-2.5-pro">Gemini 2.5 Pro (High Intelligence)</option>
+              <option value="gemini-1.5-flash">Gemini 1.5 Flash (Legacy Fast)</option>
+              <option value="gemini-1.5-pro">Gemini 1.5 Pro (Legacy Pro)</option>
+            </select>
+          </div>
+
+          <div className="settings-modal-actions">
+            <button className="sig-btn" onClick={() => setSettingsModalOpen(false)}>Cancel</button>
+            <button 
+              className="sig-btn primary" 
+              onClick={() => {
+                localStorage.setItem('gemini_api_key', tempApiKey.trim());
+                localStorage.setItem('gemini_model', tempModel);
+                setCustomApiKey(tempApiKey.trim());
+                setSelectedModel(tempModel);
+                setSettingsModalOpen(false);
+              }}
+            >
+              ✓ Save Settings
+            </button>
           </div>
         </div>
       </div>

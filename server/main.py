@@ -1,7 +1,8 @@
 import os
 import json
 import time
-from fastapi import FastAPI, UploadFile, File, Form, HTTPException
+import re
+from fastapi import FastAPI, UploadFile, File, Form, HTTPException, Header
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.staticfiles import StaticFiles
 from fastapi.responses import FileResponse
@@ -89,6 +90,39 @@ def generate_zeeseense_pdf(data):
     pdf.cell(20, 8, " Sl. No :", border=1, align='C')
     pdf.cell(170, 8, " Task Description", border=1, align='C', ln=1)
     
+    # Helper to write highlighted text
+    def write_highlighted_text(pdf_obj, text_str, line_height=5):
+        red_pat = r"\b(?:Issue Observed|Issue|observed|Faulty|Failed|Not functioning|offline|intermittent)\b"
+        blue_pat = r"\b(?:Troubleshooting Performed|Troubleshooting|Troubleshoot|Checked|Inspected|Identified|Shifted|Tested|Testing|restarted|recycle|restart)\b"
+        green_pat = r"\b(?:Solved|Resolved|Fixed|Functioning properly|Working properly|successfully|confirmed|operational)\b"
+        gray_pat = r"\b(?:work Done|Work Done|Status)\b"
+        
+        pattern = re.compile(f"({red_pat}|{blue_pat}|{green_pat}|{gray_pat})", re.IGNORECASE)
+        parts = pattern.split(text_str)
+        
+        for part in parts:
+            if not part:
+                continue
+            if re.match(red_pat, part, re.IGNORECASE):
+                pdf_obj.set_text_color(220, 38, 38)
+                pdf_obj.set_font("Arial", "B", 10)
+            elif re.match(blue_pat, part, re.IGNORECASE):
+                pdf_obj.set_text_color(37, 99, 235)
+                pdf_obj.set_font("Arial", "B", 10)
+            elif re.match(green_pat, part, re.IGNORECASE):
+                pdf_obj.set_text_color(22, 163, 74)
+                pdf_obj.set_font("Arial", "B", 10)
+            elif re.match(gray_pat, part, re.IGNORECASE):
+                pdf_obj.set_text_color(75, 85, 99)
+                pdf_obj.set_font("Arial", "B", 10)
+            else:
+                pdf_obj.set_text_color(26, 64, 166)
+                pdf_obj.set_font("Arial", "", 10)
+            pdf_obj.write(line_height, part)
+        
+        pdf_obj.set_text_color(0, 0, 0)
+        pdf_obj.set_font("Arial", "", 10)
+
     # Tasks Content
     pdf.set_font("Arial", '', 10)
     
@@ -97,8 +131,27 @@ def generate_zeeseense_pdf(data):
         tasks = [{'slNo': 1, 'description': data.get('taskDescription', '')}]
         
     for task in tasks:
-        pdf.cell(20, 8, str(task.get('slNo', '')), border='LR', align='C')
-        pdf.cell(170, 8, " " + str(task.get('description', '')), border='R', ln=1)
+        sl_no = str(task.get('slNo', ''))
+        description = str(task.get('description', ''))
+        
+        y_start = pdf.get_y()
+        pdf.set_xy(30, y_start + 1.5)
+        pdf.set_left_margin(30)
+        
+        write_highlighted_text(pdf, description, line_height=5)
+        
+        pdf.set_left_margin(10)
+        y_end = pdf.get_y() + 1.5
+        row_height = y_end - y_start
+        if row_height < 8:
+            row_height = 8
+            y_end = y_start + 8
+            
+        pdf.set_xy(10, y_start)
+        pdf.cell(20, row_height, sl_no, border='LR', align='C')
+        pdf.set_xy(30, y_start)
+        pdf.cell(170, row_height, "", border='R', ln=1)
+        pdf.set_y(y_end)
         
     # Fill remaining space in task box
     while pdf.get_y() < 180:
@@ -109,14 +162,16 @@ def generate_zeeseense_pdf(data):
     pdf.cell(190, 0, "", border='T', ln=1)
     
     # Follow-up
-    pdf.set_y(185)
+    y_followup = max(185, pdf.get_y() + 5)
+    pdf.set_y(y_followup)
     pdf.set_font("Arial", 'B', 10)
     pdf.cell(190, 6, "Follow-up required", 0, 1)
     pdf.set_font("Arial", '', 10)
     pdf.multi_cell(190, 20, data.get('followUpRequired', ''), border=1)
     
     # Signatures
-    pdf.set_y(230)
+    y_sigs = max(230, pdf.get_y() + 8)
+    pdf.set_y(y_sigs)
     pdf.set_font("Arial", 'B', 10)
     pdf.cell(95, 5, "ZeeSense Engr.", 0, 0, 'C')
     pdf.cell(95, 5, "Customer Rep.", 0, 1, 'C')
@@ -127,7 +182,7 @@ def generate_zeeseense_pdf(data):
     
     sigs = data.get('signatures', [None, None])
     temp_files = []
-    y_sig = 236
+    y_sig = y_sigs + 6
     w_sig = 50
     h_sig = 18
     
@@ -148,7 +203,7 @@ def generate_zeeseense_pdf(data):
             except Exception as e:
                 print(f"Error embedding signature {i}: {e}")
                 
-    pdf.set_y(256)
+    pdf.set_y(y_sigs + 26)
     pdf.set_font("Arial", '', 10)
     pdf.cell(95, 5, "(Name & Signature)", 0, 0, 'C')
     pdf.cell(95, 5, "(Name & Signature)", 0, 1, 'C')
@@ -167,9 +222,35 @@ def generate_zeeseense_pdf(data):
     return filename
 
 @app.post("/api/process")
-async def process_data(audio: UploadFile = File(None), text: str = Form(None)):
+async def process_data(
+    audio: UploadFile = File(None), 
+    text: str = Form(None),
+    x_gemini_api_key: str = Header(None),
+    x_gemini_model: str = Header(None)
+):
     try:
-        models_to_try = ["gemini-3.1-pro-preview", "gemini-2.5-flash", "gemini-2.5-pro"]
+        api_key = x_gemini_api_key if x_gemini_api_key is not None else os.getenv("VITE_GEMINI_API_KEY")
+        if api_key:
+            api_key = api_key.strip()
+        if not api_key:
+            raise HTTPException(status_code=400, detail="Gemini API Key is missing. Please configure your API key in Settings (gear icon in toolbar).")
+        
+        # Configure genai dynamically
+        genai.configure(api_key=api_key)
+        
+        user_model = x_gemini_model or "auto"
+        default_models = [
+            "gemini-2.5-flash",
+            "gemini-2.5-pro",
+            "gemini-1.5-flash",
+            "gemini-1.5-pro"
+        ]
+        
+        if user_model and user_model != "auto":
+            models_to_try = [user_model] + [m for m in default_models if m != user_model]
+        else:
+            models_to_try = default_models
+
         last_error = None
         
         prompt = """
@@ -178,16 +259,15 @@ async def process_data(audio: UploadFile = File(None), text: str = Form(None)):
         Your job is to extract and ELABORATE every single point from the technician's raw notes into a structured JSON service report.
 
         STRICT RULES — YOU MUST FOLLOW ALL OF THESE:
-        1. NEVER merge multiple events into one sentence. Each distinct action, finding, observation, or recommendation must be its OWN separate task entry.
-        2. NEVER skip or summarize away any detail. If the technician mentions restarting a switch, a media converter, a wireless device, and a PoE injector — these are FOUR separate details that must all appear (either in one elaborated sentence or split into separate tasks).
-        3. ELABORATE every task into a full, professional sentence. Never use vague or short descriptions. Expand abbreviations, fix grammar, and use formal technical language.
-        4. Use EXACTLY these label prefixes at the start of each task description:
-           - "Issue Observed:" — for problems noticed on arrival
-           - "Troubleshooting Performed:" — for actions taken by the engineer
-           - "Observation:" — for findings/status discovered during work
-           - "Recommendation:" — for suggestions for future action
-        5. Minimum 6 tasks for any service visit. Most visits should produce 7–10 tasks.
-        6. The followUpRequired field must ALWAYS contain a detailed multi-line recommendation and current temporary status.
+        1. ELABORATE the report using the exact phrasing style of standard customer service reports (CSR) as seen in the examples:
+           - Task 1 must always be an initial observation of the problem, starting with: "During the site visit, it was observed that ..."
+           - Task 2 must always be the troubleshooting details and findings, starting with: "Troubleshooting was carried out and it was found that ..."
+           - Task 3 must always be the repair and test verification, starting with: "After completing the [rectification/installation/repair], all [devices/systems] were tested and confirmed to be working properly."
+           - Task 4 must always be a concise numbered list of physical steps performed, starting with: "work Done: 1) Checked ... 2) Inspected ... 3) Identified ... 4) Shifted ... 5) Tested ..."
+           - Task 5 must always be a statement of current final status, starting with: "Status: All [devices/systems] are now functioning properly."
+        2. If the technician's notes contain multiple different issues or repairs, you can insert additional tasks following these steps (e.g. additional troubleshooting tasks or additional work done items), but keep this general flow: Observations -> Troubleshooting -> Rectification -> work Done -> Status.
+        3. Never skip or summarize away any detail. If the technician mentions specific actions or items, make sure they are elaborated in the "work Done:" task list and the troubleshooting/rectification descriptions.
+        4. The followUpRequired field must ALWAYS contain a detailed multi-line recommendation and current temporary status.
 
         Output a valid JSON object with EXACTLY this structure:
         {
@@ -196,9 +276,11 @@ async def process_data(audio: UploadFile = File(None), text: str = Form(None)):
           "customerRep": "string (customer name, or empty string)",
           "zeeSenseRep": "string (engineer name, or empty string)",
           "tasks": [
-            {"slNo": 1, "description": "Issue Observed: ...full elaborated sentence..."},
-            {"slNo": 2, "description": "Troubleshooting Performed: ...full elaborated sentence..."},
-            ...more tasks...
+            {"slNo": 1, "description": "During the site visit, it was observed that ..."},
+            {"slNo": 2, "description": "Troubleshooting was carried out and it was found that ..."},
+            {"slNo": 3, "description": "After completing the ..., all ... were tested and confirmed to be working properly."},
+            {"slNo": 4, "description": "work Done: 1) ... 2) ..."},
+            {"slNo": 5, "description": "Status: All ... are now functioning properly."}
           ],
           "followUpRequired": "Recommendation:\\n- point 1\\n- point 2\\n\\nTemporary Status:\\n..."
         }
@@ -213,15 +295,11 @@ async def process_data(audio: UploadFile = File(None), text: str = Form(None)):
           "customerRep": "",
           "zeeSenseRep": "",
           "tasks": [
-            {"slNo": 1, "description": "Issue Observed: Upon arrival at the site, it was found that most of the lift cameras were offline and not displaying any video feed."},
-            {"slNo": 2, "description": "Troubleshooting Performed: Proceeded to the Lift Machine Room (LMR) to inspect the network equipment responsible for the lift camera connectivity."},
-            {"slNo": 3, "description": "Troubleshooting Performed: Performed a manual restart of the Network Switch located in the LMR room."},
-            {"slNo": 4, "description": "Troubleshooting Performed: Performed a manual restart of the Media Converter in the LMR room to restore fiber-to-copper signal conversion."},
-            {"slNo": 5, "description": "Troubleshooting Performed: Performed a manual restart of the Wireless Device (Access Point/Bridge) connected to the LMR network infrastructure."},
-            {"slNo": 6, "description": "Troubleshooting Performed: Performed a manual restart of the PoE (Power over Ethernet) Injector supplying power to the network devices."},
-            {"slNo": 7, "description": "Observation: Following the restart of all network devices, all lift cameras successfully came back online and are now functioning normally."},
-            {"slNo": 8, "description": "Observation: The currently installed Network Switch and Media Converter are operating on legacy 10/100 Mbps technology, which is insufficient for stable, high-bandwidth CCTV transmission."},
-            {"slNo": 9, "description": "Observation: The issue is intermittent and recurring — devices go offline after a few hours or days and require a technician to physically visit the LMR room to manually restart the equipment each time."}
+            {"slNo": 1, "description": "During the site visit, it was observed that most of the lift cameras were offline and not displaying any video feed."},
+            {"slNo": 2, "description": "Troubleshooting was carried out and it was found that the network switch, media converter, wireless bridge, and PoE injector in the Lift Machine Room (LMR) required a power recycle to restore connectivity."},
+            {"slNo": 3, "description": "After completing the manual device restarts, all lift cameras were tested and confirmed to be working properly and back online."},
+            {"slNo": 4, "description": "work Done: 1) Checked power status of lift cameras 2) Inspected LMR room network switch, media converter, wireless bridge, and PoE injectors 3) Performed manual power recycle on all network devices 4) Restored camera connectivity successfully 5) Monitored video feeds to verify stability."},
+            {"slNo": 5, "description": "Status: All lift cameras are now functioning properly, but the underlying issue of legacy 10/100 Mbps hardware causing intermittent drops remains unresolved."}
           ],
           "followUpRequired": "Recommendation:\\n- Replace the existing 10/100 Mbps Network Switch with a Gigabit Switch to improve data throughput and reduce connection drops.\\n- Replace the existing 10/100 Mbps Media Converter with a Gigabit Media Converter for stable fiber signal conversion.\\n- If the issue persists after upgrading the switch and media converter, proceed with installing a dedicated Lift Flat Cable (structured cabling) to provide a more reliable and permanent connectivity solution.\\n- Conduct a detailed network audit of the LMR room infrastructure to identify any other aging or underperforming components.\\n\\nTemporary Status:\\nAll lift cameras are currently operational following the manual device restart. However, the fix is temporary. The root cause (aging 10/100 hardware and unstable network path) has not been permanently resolved. Continuous monitoring is recommended until a permanent hardware upgrade is completed."
         }
@@ -253,13 +331,25 @@ async def process_data(audio: UploadFile = File(None), text: str = Form(None)):
                 return job_data
             except Exception as e:
                 print(f"Failed with {model_name}: {e}")
+                err_msg = str(e)
+                if "API key was reported as leaked" in err_msg or "API_KEY_INVALID" in err_msg or "API key not valid" in err_msg:
+                    raise e
                 last_error = e
                 continue
         
         raise last_error
+    except HTTPException as he:
+        raise he
     except Exception as e:
         print(f"Error: {e}")
-        raise HTTPException(status_code=500, detail=str(e))
+        error_msg = str(e)
+        if "API key was reported as leaked" in error_msg:
+            raise HTTPException(status_code=400, detail="Your Gemini API key was reported as leaked. Please generate a new key in Google AI Studio and update it in Settings.")
+        elif "API_KEY_INVALID" in error_msg or "API key not valid" in error_msg:
+            raise HTTPException(status_code=400, detail="Invalid Gemini API key. Please check your key in Settings.")
+        elif "quota" in error_msg.lower() or "429" in error_msg:
+            raise HTTPException(status_code=429, detail="Gemini API rate limit or quota exceeded. Please try again in a few seconds or check your plan details.")
+        raise HTTPException(status_code=500, detail=error_msg)
 
 @app.post("/api/generate-pdf")
 async def generate_pdf_endpoint(data: dict):
