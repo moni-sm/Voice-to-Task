@@ -263,10 +263,13 @@ async def process_data(
            - Task 1 must always be an initial observation of the problem, starting with: "During the site visit, it was observed that ..."
            - Task 2 must always be the troubleshooting details and findings, starting with: "Troubleshooting was carried out and it was found that ..."
            - Task 3 must always be the repair and test verification, starting with: "After completing the [rectification/installation/repair], all [devices/systems] were tested and confirmed to be working properly."
-           - Each physical step performed under "work Done" must be output as a SEPARATE task item in the tasks array, line-by-line. Each must start with: "work Done: [number]) [Action] ..." (e.g. "work Done: 1) Checked ...", "work Done: 2) Inspected ...", etc.). Do NOT group them into a single string.
-           - The last task must always be a statement of current final status, starting with: "Status: All [devices/systems] are now functioning properly."
-        2. If the technician's notes contain multiple different issues or repairs, you can insert additional tasks following these steps (e.g. additional troubleshooting tasks or additional work done items), but keep this general flow: Observations -> Troubleshooting -> Rectification -> work Done -> Status.
-        3. Never skip or summarize away any detail. If the technician mentions specific actions or items, make sure they are elaborated in the "work Done" tasks and the troubleshooting/rectification descriptions.
+            - Each physical step performed under "Work Done" must be output as a SEPARATE task item in the tasks array, line-by-line. 
+              - The first step must start with "Work Done: 1) [Action] ..." (e.g. "Work Done: 1) Checked ...").
+              - Subsequent steps must start directly with the number, e.g. "2) Inspected ...", "3) Performed ...", etc., without repeating "Work Done:".
+              - Do NOT group them into a single string.
+            - The last task must always be a statement of current final status, starting with: "Status: All [devices/systems] are now functioning properly."
+        2. If the technician's notes contain multiple different issues or repairs, you can insert additional tasks following these steps (e.g. additional troubleshooting tasks or additional work done items), but keep this general flow: Observations -> Troubleshooting -> Rectification -> Work Done -> Status.
+        3. Never skip or summarize away any detail. If the technician mentions specific actions or items, make sure they are elaborated in the "Work Done" tasks and the troubleshooting/rectification descriptions.
         4. The followUpRequired field must ALWAYS contain a detailed multi-line recommendation and current temporary status.
 
         Output a valid JSON object with EXACTLY this structure:
@@ -279,8 +282,8 @@ async def process_data(
             {"slNo": 1, "description": "During the site visit, it was observed that ..."},
             {"slNo": 2, "description": "Troubleshooting was carried out and it was found that ..."},
             {"slNo": 3, "description": "After completing the ..., all ... were tested and confirmed to be working properly."},
-            {"slNo": 4, "description": "work Done: 1) ..."},
-            {"slNo": 5, "description": "work Done: 2) ..."},
+            {"slNo": 4, "description": "Work Done: 1) ..."},
+            {"slNo": 5, "description": "2) ..."},
             {"slNo": 6, "description": "Status: All ... are now functioning properly."}
           ],
           "followUpRequired": "Recommendation:\\n- point 1\\n- point 2\\n\\nTemporary Status:\\n..."
@@ -299,11 +302,11 @@ async def process_data(
             {"slNo": 1, "description": "During the site visit, it was observed that most of the lift cameras were offline and not displaying any video feed."},
             {"slNo": 2, "description": "Troubleshooting was carried out and it was found that the network switch, media converter, wireless bridge, and PoE injector in the Lift Machine Room (LMR) required a power recycle to restore connectivity."},
             {"slNo": 3, "description": "After completing the manual device restarts, all lift cameras were tested and confirmed to be working properly and back online."},
-            {"slNo": 4, "description": "work Done: 1) Checked power status of lift cameras"},
-            {"slNo": 5, "description": "work Done: 2) Inspected LMR room network switch, media converter, wireless bridge, and PoE injectors"},
-            {"slNo": 6, "description": "work Done: 3) Performed manual power recycle on all network devices"},
-            {"slNo": 7, "description": "work Done: 4) Restored camera connectivity successfully"},
-            {"slNo": 8, "description": "work Done: 5) Monitored video feeds to verify stability."},
+            {"slNo": 4, "description": "Work Done: 1) Checked power status of lift cameras"},
+            {"slNo": 5, "description": "2) Inspected LMR room network switch, media converter, wireless bridge, and PoE injectors"},
+            {"slNo": 6, "description": "3) Performed manual power recycle on all network devices"},
+            {"slNo": 7, "description": "4) Restored camera connectivity successfully"},
+            {"slNo": 8, "description": "5) Monitored video feeds to verify stability."},
             {"slNo": 9, "description": "Status: All lift cameras are now functioning properly, but the underlying issue of legacy 10/100 Mbps hardware causing intermittent drops remains unresolved."}
           ],
           "followUpRequired": "Recommendation:\\n- Replace the existing 10/100 Mbps Network Switch with a Gigabit Switch to improve data throughput and reduce connection drops.\\n- Replace the existing 10/100 Mbps Media Converter with a Gigabit Media Converter for stable fiber signal conversion.\\n- If the issue persists after upgrading the switch and media converter, proceed with installing a dedicated Lift Flat Cable (structured cabling) to provide a more reliable and permanent connectivity solution.\\n- Conduct a detailed network audit of the LMR room infrastructure to identify any other aging or underperforming components.\\n\\nTemporary Status:\\nAll lift cameras are currently operational following the manual device restart. However, the fix is temporary. The root cause (aging 10/100 hardware and unstable network path) has not been permanently resolved. Continuous monitoring is recommended until a permanent hardware upgrade is completed."
